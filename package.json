@@ -1,6 +1,6 @@
 {
   "name": "dsh-if",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "DSH /if command: let an LLM judge a condition from prior context, then send the instruction below it as a user message.",
   "type": "module",
   "main": "lib/index.js",

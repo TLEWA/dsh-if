@@ -17,12 +17,16 @@ function harness({ answer = 'YES', messages = [], turns = [], stream, fork, fork
   const guardDuringJudge = [];
   const childGuards = [];
   const events = [...turns];
+  const effects = [];
   let childGuardReleased = false;
   let guard;
   let guardRelease;
   let createdHandler;
 
   const ctx = {
+    effect(fn) {
+      effects.push(fn);
+    },
     commands: {
       register(value) {
         definition = value;
@@ -144,7 +148,24 @@ function harness({ answer = 'YES', messages = [], turns = [], stream, fork, fork
     childGuardArmed: () => childGuards.length,
     childGuardReleased: () => childGuardReleased,
     guardReleased: () => guardRelease === true,
+    dispose() {
+      for (const fn of effects) {
+        const cleanup = fn();
+        if (typeof cleanup === 'function') cleanup();
+      }
+    },
   };
+}
+
+/** Poll until `fn()` is truthy; tests must never depend on a fixed delay. */
+async function waitFor(fn, timeout = 3000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const value = fn();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error('timed out waiting for the queued judge');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 /** Mirrors the plugin's rule: a start that no later end has closed is open. */
@@ -287,45 +308,46 @@ test('a failing fork activation surfaces as a judge error and disposes', async (
 // Queueing behind a running turn.
 // ---------------------------------------------------------------------------
 
-test('the judge waits for the running turn to finish, then judges the closed turn', async () => {
+test('a busy session acknowledges at once, then judges the closed turn', async () => {
   const h = harness({ fork: { text: 'YES' }, turns: [{ type: 'turn/start', seq: 0 }] });
-  setTimeout(() => {
-    h.pushEvent({ type: 'turn/end', seq: 1 });
-  }, 60);
 
+  const started = Date.now();
   const result = await invoke(h, ' 任务是否已经完成\n请继续下一步');
 
+  // A running command keeps the composer blocked, so the handler must return
+  // instead of parking on the turn boundary.
   assert.equal(result.kind, 'success');
+  assert.match(result.text, /已排队/);
+  assert.ok(Date.now() - started < 500, 'the handler must not wait for the turn');
+  assert.equal(h.forks.length, 0, 'no judge while the turn is still running');
+
+  h.pushEvent({ type: 'turn/end', seq: 1 });
+
+  await waitFor(() => h.followups.length === 1);
   assert.equal(h.forks.length, 1);
   assert.ok(h.forks[0].eventsAtStart.includes('turn/end:1'), 'the judge starts only after the turn closed');
-  assert.equal(h.followups.length, 1);
 });
 
-test('a turn that ends while the next one already started still releases the judge', async () => {
+test('a queued judge still fires when the next turn starts immediately', async () => {
   const h = harness({ fork: { text: 'NO' }, turns: [{ type: 'turn/start', seq: 0 }] });
-  setTimeout(() => {
-    h.pushEvent({ type: 'turn/end', seq: 1 });
-    h.pushEvent({ type: 'turn/start', seq: 2 });
-  }, 60);
+  await invoke(h, ' 条件\n执行指令');
 
-  const result = await invoke(h, ' 条件\n执行指令');
+  h.pushEvent({ type: 'turn/end', seq: 1 });
+  h.pushEvent({ type: 'turn/start', seq: 2 });
 
-  assert.equal(result.kind, 'success');
+  await waitFor(() => h.forks.length === 1);
   assert.ok(h.forks[0].eventsAtStart.includes('turn/end:1'), 'our turn closed before the judge started');
   assert.equal(h.followups.length, 0);
 });
 
-test('cancelling the command while it is queued starts no judge at all', async () => {
+test('disposing the plugin drops a queued judge without judging', async () => {
   const h = harness({ fork: { text: 'YES' }, turns: [{ type: 'turn/start', seq: 0 }] });
-  const controller = new AbortController();
-  const pending = h.definition.handler({
-    agent: h.agent,
-    rawInput: ' 条件\n执行指令',
-    signal: controller.signal,
-  });
-  setTimeout(() => controller.abort(new Error('已取消')), 60);
+  await invoke(h, ' 条件\n执行指令');
 
-  await assert.rejects(pending, /已取消/);
+  h.dispose();
+  h.pushEvent({ type: 'turn/end', seq: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 400));
+
   assert.equal(h.forks.length, 0);
   assert.equal(h.followups.length, 0);
 });

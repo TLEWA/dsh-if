@@ -3,6 +3,20 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-11-04
+
+### Fixed
+
+- The queued judge no longer runs inside the command handler. A command that is still
+  executing keeps the composer blocked, so parking for a whole turn made the input box
+  unusable. The handler now acknowledges immediately ("queued") and the judgement waits
+  in the background; the running turn's token count is unchanged.
+
+### Known limitation
+
+- A queued `/if` cannot appear in the composer's queued-message panel: slash commands are
+  dispatched immediately by the client, and plugins cannot enqueue into that outbox.
+
 ## [0.2.2] - 2026-11-04
 
 ### Fixed

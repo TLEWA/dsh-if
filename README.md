@@ -23,7 +23,7 @@
 | 上下文条件判断 | 判断器继承当前会话的完整上下文（工具 + system prompt + 历史消息），按条件回答 `YES` 或 `NO` |
 | 复用 KV 缓存 | fork 子代理只追加一条尾部 user 消息，tools / system / messages 与主会话逐字节一致，命中 provider 前缀缓存 |
 | 只读判断 | 工具目录保持不变（这正是缓存命中的前提），执行期 guard 只放行 `read` / `glob` / `grep` 等只读工具；写入、命令、子代理一律拒绝 |
-| 忙碌时排队 | 模型正在工作时，`/if` 先等到当前回合结束再判断，和普通消息一样排队，不会拿旧上下文下结论 |
+| 忙碌时排队 | 模型正在工作时，`/if` 立即返回、不占用输入框，再等到当前回合结束才判断，不会拿旧上下文下结论 |
 | 条件成立才发送 | 只有 `YES` 才把指令作为用户消息发给主 agent，`NO` 完全不触发主 agent |
 | 判断不进上下文 | 判断在独立子会话里完成，不写主会话事件，不调用 `agent.inject` |
 | 命令不泄露参数 | `recordInput: false`，log-only 的 `command/run` 也不记录条件或指令 |
@@ -52,13 +52,13 @@
 固定版本：
 
 ```text
-dsh-if@0.2.2
+dsh-if@0.2.3
 ```
 
 命令行等价写法：
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.2.2
+dsh plugin --profile desktop add dsh-if@0.2.3
 ```
 
 ### 从 GitHub 安装
@@ -72,11 +72,11 @@ https://github.com/TLEWA/dsh-if
 固定到标签或 Release 附件：
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.2
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.3
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.2.2/dsh-if-0.2.2.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.2.3/dsh-if-0.2.3.tgz
 ```
 
 ### 从源码安装
@@ -124,8 +124,9 @@ dsh plugin --profile desktop add .
 1. `ctx.commands.register` 注册 `/if`，并设置 `recordInput: false`。
 2. **排队到当前回合结束。** 斜杠命令在模型工作时也会被立即派发，但此时 fork 子会话只能继承到上一个
    `turn/end` 之前的历史，看到的是"正在进行的工作还没发生"的旧上下文。所以 `/if` 先读
-   `session.snapshotEvents()`：只要有未闭合的回合，就等到那个回合结束（最多 30 分钟）再判断，
-   行为和普通消息排队一致；判断和投递用的都是回合结束后的完整上下文。
+   `session.snapshotEvents()`：只要有未闭合的回合，就把判断交给后台任务（命令立刻返回"已排队"，
+   输入框不被占用），等那个回合结束（最多 30 分钟）再判断。判断和投递用的都是回合结束后的完整上下文，
+   所以下一个回合开始时，指令和普通消息一样排在队列里等待。
 3. **首选：fork 子代理判断。** 通过 `ctx.subagents.getProvider('fork')` 取 provider（要求
    `inheritsParentContext === true`），再用 `startActivation({ provider: 'fork', childId, request: { parent, agentOptions, prompt }, delivery: 'caller' })`
    启动判断子会话。请求里只有一条尾部 user 消息（判断规则 + 条件）；tools、system prompt、历史消息全部原样继承，
@@ -199,6 +200,8 @@ npm test
 - 判断在宿主里是一个真实的子代理回合：桌面端会在会话时间线上显示一张子代理卡片
   （label 为 `if judge`，含耗时、费用与 token 用量），判断结束即释放。主会话的消息列表
   不会因此多出任何 judge 消息——那张卡片属于独立子会话。
+- `/if` 排队时不会出现在输入框上方的"排队消息"面板里：那是客户端的本地发件箱，斜杠命令会被立即派发，
+  插件没有办法往里塞条目，所以也不能在那里面编辑、删除或"强制推送"。命令节点自己会显示"已排队"。
 - 只读白名单是静态名单：未列出的工具（包括 MCP 只读工具）会被拒绝；需要放宽时请提 issue。
 - 回退路径（host 没有 fork provider）看到的是纯文本记录，图片和文件只显示 `[图片]` / `[文件]` 占位符，
   条件需要的信息如果不在最近约 24k 字符的记录里，会被判为不成立。

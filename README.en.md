@@ -27,7 +27,7 @@ existing prefix is not rewritten.
 | Context-aware condition | The judge inherits the full session context (tools + system prompt + history) and answers `YES` or `NO` |
 | Reuses the KV cache | The forked judge appends one trailing user message; tools / system / messages stay byte-identical to the main request |
 | Read-only judging | The tool catalog is never trimmed (that is what keeps the prefix identical); an execution-time guard allows `read` / `glob` / `grep` and other inspection tools, and refuses writes, commands, and subagents |
-| Queues while busy | While a turn is running, `/if` waits for that turn to finish before judging, like a queued message, so a verdict never describes a stale context |
+| Queues while busy | While a turn is running, `/if` returns at once without blocking the composer and judges once that turn finishes, like a queued message, so a verdict never describes a stale context |
 | Send only when true | Only `YES` sends the instruction as a user message; `NO` never wakes the main agent |
 | Judgment stays out of context | Judging happens in a separate child session; no main-session event and no `agent.inject` |
 | Command arguments stay private | `recordInput: false`, so even the log-only `command/run` event omits them |
@@ -56,13 +56,13 @@ Requirements:
 Pin a version:
 
 ```text
-dsh-if@0.2.2
+dsh-if@0.2.3
 ```
 
 Equivalent CLI command:
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.2.2
+dsh plugin --profile desktop add dsh-if@0.2.3
 ```
 
 ### From GitHub
@@ -76,11 +76,11 @@ https://github.com/TLEWA/dsh-if
 Pin a tag or the release tarball:
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.2
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.3
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.2.2/dsh-if-0.2.2.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.2.3/dsh-if-0.2.3.tgz
 ```
 
 ### From source
@@ -131,9 +131,9 @@ Start executing plan A
 2. **Queued behind the running turn.** A slash command is dispatched even while the model is
    working, but at that moment a fork child can only inherit history up to the previous
    `turn/end` — a context in which the running work has not happened yet. `/if` therefore reads
-   `session.snapshotEvents()`: while a turn is open it waits for that turn to close (up to 30
-   minutes), exactly like a queued normal message, and only then judges and delivers against the
-   finished context.
+   `session.snapshotEvents()`: while a turn is open it hands the judgement to a background task and
+   the command returns "queued" immediately (so the composer stays usable); the task waits for that
+   turn to close (up to 30 minutes) and only then judges and delivers against the finished context.
 3. **Preferred path: a forked judge.** It resolves `ctx.subagents.getProvider('fork')`
    (requiring `inheritsParentContext === true`) and starts the child with
    `startActivation({ provider: 'fork', childId, request: { parent, agentOptions, prompt }, delivery: 'caller' })`.
@@ -224,6 +224,9 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
   timeline (label `if judge`, with elapsed time, cost and token usage) until the judge is
   disposed. The main session gains no judge messages — that card belongs to the separate
   child session.
+- A queued `/if` does not appear in the composer's queued-message panel: that panel is the client's local
+  outbox, and slash commands are dispatched immediately, so a plugin cannot add an entry or offer edit / delete /
+  force-send there. The command node itself reports "queued".
 - The read-only allowlist is static: tools that are not listed — including read-only MCP
   tools — are refused. Open an issue if you need one added.
 - On the fallback path the judge sees a plain-text transcript; images and files appear only as
