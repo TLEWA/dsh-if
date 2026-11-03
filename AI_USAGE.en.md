@@ -50,12 +50,15 @@ Verified:
   - `YES`: `/if 1+1=2` + `请只回复 OK` returned "条件成立，指令已作为用户消息发送。";
     a user message `请只回复 OK` and assistant reply `OK` followed;
 - The session reloads cleanly, and the followup message has `id` and `role: 'user'`.
+- On 2026-11-04, in the real DSH desktop, `/if 你不能看到全部上下文` exercised the 0.2.0
+  forked path: the child inherited the whole parent history (~109K tokens) with the full
+  tool catalog and an unchanged system prompt, and answered `YES`; the session logs show
+  the main session received no judge messages (all of them live in the separate child).
 
 Not fully verified:
 
-- **the forked judge path has not been exercised in a real DSH GUI yet**: it is covered
-  by unit tests with mocked `ctx.subagents` / `ctx.tools`; prefix reuse and child tool
-  interception still need one confirmation in a real host;
+- real-GUI interception of the read-only guard against writes/commands is covered by unit
+  tests only;
 - every DSH version, operating system, theme, and zoom level;
 - boundary behavior when a long session hits the 24k-character clip (fallback path only);
 - combinations with other command or session-mutating plugins;

@@ -160,6 +160,9 @@ This is a design constraint, not an option:
 - The child is a separate session: it appends no main-session events and only reads history.
   The tool catalog is not trimmed either (trimming tool declarations would change the prefix and
   break the cache); the read-only restriction lives in the execution-time guard instead.
+- The trade-off is visible: every judgment resends the whole context, tokens are counted in
+  full, and the cached portion is billed at the provider's cache rate. The longer the session,
+  the larger the absolute token count of one judgment (the hit rate decides the actual cost).
 - On `NO`, the main session is unchanged.
 - On `YES`, the only change is a normal user message appended at the **tail** via
   `agent.followup`. Earlier messages, the system prompt, and tool declarations are unchanged,
@@ -210,8 +213,10 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
 
 ## Known limitations
 
-- The judge child briefly appears in DSH's subagent list (label `if judge`) and is disposed
-  once judging ends.
+- Judging is a real subagent turn: the desktop UI shows a subagent card on the session
+  timeline (label `if judge`, with elapsed time, cost and token usage) until the judge is
+  disposed. The main session gains no judge messages — that card belongs to the separate
+  child session.
 - The read-only allowlist is static: tools that are not listed — including read-only MCP
   tools — are refused. Open an issue if you need one added.
 - On the fallback path the judge sees a plain-text transcript; images and files appear only as
