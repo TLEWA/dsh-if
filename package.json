@@ -8,6 +8,7 @@
     ".": {
       "default": "./lib/index.js"
     },
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -54,15 +55,25 @@
     "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "engines": {
     "node": ">=20.3"
   },
   "scripts": {
-    "check": "node --check lib/index.js && node --check test/if.test.mjs",
+    "check": "node --check lib/index.js && node --check lib/client.js && node --check test/if.test.mjs",
     "test": "node --test test/if.test.mjs",
     "prepack": "npm run check && npm test",
     "prepublishOnly": "npm run check && npm test"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5"
   }
 }
