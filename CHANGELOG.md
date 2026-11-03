@@ -3,6 +3,15 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.4] - 2026-11-04
+
+### Fixed
+
+- The forked judge inherits the parent session's language, so a Chinese session answers
+  "是" / "不成立" even though the prompt asks for YES / NO; that surfaced as
+  "条件判断失败：模型未返回 YES/NO". Both spellings are now accepted, with negative forms
+  matched first so "不成立" is never read as "成立".
+
 ## [0.2.3] - 2026-11-04
 
 ### Fixed

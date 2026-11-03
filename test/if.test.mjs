@@ -238,6 +238,18 @@ test('forked judge NO verdict does not send the instruction', async () => {
   assert.equal(h.disposes.length, 1);
 });
 
+test('a forked judge that answers in Chinese still yields a verdict', async () => {
+  // The child inherits the parent's language, and a Chinese session answers
+  // "是" / "不成立" even when the prompt asks for YES / NO.
+  const yes = harness({ fork: { text: '是' } });
+  assert.equal((await invoke(yes, ' 条件\n执行指令')).kind, 'success');
+  assert.equal(yes.followups.length, 1);
+
+  const no = harness({ fork: { text: '不成立' } });
+  assert.deepEqual(await invoke(no, ' 条件\n执行指令'), { kind: 'success', text: '条件不成立，未执行。' });
+  assert.equal(no.followups.length, 0);
+});
+
 test('forked judge output with tool-call markup still yields a verdict', async () => {
   const h = harness({ fork: { text: '<tool_call>{"name":"bash"}</tool_call>\nYES' } });
   const result = await invoke(h, ' 条件\n执行指令');

@@ -52,13 +52,13 @@
 固定版本：
 
 ```text
-dsh-if@0.2.3
+dsh-if@0.2.4
 ```
 
 命令行等价写法：
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.2.3
+dsh plugin --profile desktop add dsh-if@0.2.4
 ```
 
 ### 从 GitHub 安装
@@ -72,11 +72,11 @@ https://github.com/TLEWA/dsh-if
 固定到标签或 Release 附件：
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.3
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.4
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.2.3/dsh-if-0.2.3.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.2.4/dsh-if-0.2.4.tgz
 ```
 
 ### 从源码安装
