@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# local package / publish artifacts
+*.tgz
+.npm-cache/
+.pkgtest/
+.registrytest/
+.npmrc
+
+# development scratch
+tmp/
+.tools/
+*.log
+
+# local memory database created in this workspace
+.dsh-meow/
+
+# editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

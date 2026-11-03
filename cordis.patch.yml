@@ -1,0 +1,10 @@
+# dsh-if bundle patch
+#
+# Install into a profile with:
+#
+#   dsh plugin --profile <name> add <path-to-this-package>
+#
+# The profile boot composes this patch and mounts the host row below.
+- insert:
+    - id: if-command
+      name: 'dsh-if'

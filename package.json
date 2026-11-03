@@ -1,0 +1,68 @@
+{
+  "name": "dsh-if",
+  "version": "0.1.0",
+  "description": "DSH /if command: let an LLM judge a condition from prior context, then send the instruction below it as a user message.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICE.md",
+    "NOTICE.en.md",
+    "AI_USAGE.md",
+    "AI_USAGE.en.md"
+  ],
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "slash-command",
+    "conditional",
+    "if",
+    "agent",
+    "prompt"
+  ],
+  "author": "TLEWA",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TLEWA/dsh-if.git"
+  },
+  "homepage": "https://github.com/TLEWA/dsh-if#readme",
+  "bugs": {
+    "url": "https://github.com/TLEWA/dsh-if/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.1-rc.5"
+    },
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=20.3"
+  },
+  "scripts": {
+    "check": "node --check lib/index.js && node --check test/if.test.mjs",
+    "test": "node --test test/if.test.mjs",
+    "prepack": "npm run check && npm test",
+    "prepublishOnly": "npm run check && npm test"
+  }
+}
