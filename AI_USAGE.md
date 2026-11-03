@@ -35,7 +35,7 @@
 
 已验证：
 
-- `node --test` / `npm test` 通过 16 项测试（本机沙箱会拦 `node --test` 的子进程，
+- `node --test` / `npm test` 通过 20 项测试（本机沙箱会拦 `node --test` 的子进程，
   因此以 `node test/if.test.mjs` 进程内运行核对）；
 - 0.1.0 时在 DSH `0.2.1-rc.5`、Windows 桌面端中，通过 CDP 在真实 Web GUI 里执行过
   transcript 判断路径：
@@ -43,6 +43,7 @@
   - `YES`：`/if 1+1=2` + `请只回复 OK` 返回“条件成立，指令已作为用户消息发送。”，
     随后出现用户消息 `请只回复 OK` 和助手回复 `OK`；
 - 会话重载正常，followup 消息带 `id` 和 `role: 'user'`。
+- 2026-11-04 修复“忙碌时 /if 无效果”：用会话日志（`session.v4.jsonl.zstd`）确认命令在回合进行中会被立即派发，而 fork 子会话只继承到上一个 `turn/end`，因此判断看的是旧上下文；改为读 `session.snapshotEvents()`，等当前回合结束后再判断（新增 4 项排队/取消/空闲用例）。
 - 2026-11-04 在真实 DSH 桌面端里执行 `/if 你不能看到全部上下文`，0.2.0 的 fork 判断路径跑通：
   子会话继承了整段父历史（约 109K token），请求头里工具目录完整、system prompt 未改动，
   返回 `YES`；核对会话日志确认主会话里没有写入任何 judge 消息（judge 全部在独立子会话中）。

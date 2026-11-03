@@ -9,13 +9,14 @@ import { apply } from '../lib/index.js';
  * exercises the transcript fallback. `fork: { text: 'YES' }` exercises the
  * preferred forked judge.
  */
-function harness({ answer = 'YES', messages = [], stream, fork, forkThrows, forkInherits = true } = {}) {
+function harness({ answer = 'YES', messages = [], turns = [], stream, fork, forkThrows, forkInherits = true } = {}) {
   let definition;
   const calls = [];
   const forks = [];
   const disposes = [];
   const guardDuringJudge = [];
   const childGuards = [];
+  const events = [...turns];
   let childGuardReleased = false;
   let guard;
   let guardRelease;
@@ -66,7 +67,7 @@ function harness({ answer = 'YES', messages = [], stream, fork, forkThrows, fork
       },
       async startActivation(options) {
         if (!forkInherits) throw new Error('a non-inheriting provider must not be used');
-        forks.push(options);
+        forks.push({ ...options, eventsAtStart: events.map((event) => `${event.type}:${event.seq}`) });
         const childAgent = {
           id: options.childId,
           session: { header: { id: options.childId } },
@@ -120,6 +121,9 @@ function harness({ answer = 'YES', messages = [], stream, fork, forkThrows, fork
       requestHeader() {
         return { config: { provider: 'deepseek-official', model: 'deepseek-flash' } };
       },
+      snapshotEvents() {
+        return events;
+      },
     },
     followup(input) {
       followups.push(input);
@@ -133,12 +137,26 @@ function harness({ answer = 'YES', messages = [], stream, fork, forkThrows, fork
     disposes,
     followups,
     agent,
+    events: () => events,
+    pushEvent: (event) => events.push(event),
     guard: () => guard,
     guardDuringJudge,
     childGuardArmed: () => childGuards.length,
     childGuardReleased: () => childGuardReleased,
     guardReleased: () => guardRelease === true,
   };
+}
+
+/** Mirrors the plugin's rule: a start that no later end has closed is open. */
+function isTurnOpen(events) {
+  let start = -1;
+  let end = -1;
+  events.forEach((event, index) => {
+    const seq = typeof event.seq === 'number' ? event.seq : index;
+    if (event.type === 'turn/start') start = Math.max(start, seq);
+    if (event.type === 'turn/end') end = Math.max(end, seq);
+  });
+  return start >= 0 && start > end;
 }
 
 function invoke(h, rawInput) {
@@ -263,6 +281,61 @@ test('a failing fork activation surfaces as a judge error and disposes', async (
   assert.match(result.text, /条件判断失败/);
   assert.match(result.text, /fork unavailable/);
   assert.equal(h.followups.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Queueing behind a running turn.
+// ---------------------------------------------------------------------------
+
+test('the judge waits for the running turn to finish, then judges the closed turn', async () => {
+  const h = harness({ fork: { text: 'YES' }, turns: [{ type: 'turn/start', seq: 0 }] });
+  setTimeout(() => {
+    h.pushEvent({ type: 'turn/end', seq: 1 });
+  }, 60);
+
+  const result = await invoke(h, ' 任务是否已经完成\n请继续下一步');
+
+  assert.equal(result.kind, 'success');
+  assert.equal(h.forks.length, 1);
+  assert.ok(h.forks[0].eventsAtStart.includes('turn/end:1'), 'the judge starts only after the turn closed');
+  assert.equal(h.followups.length, 1);
+});
+
+test('a turn that ends while the next one already started still releases the judge', async () => {
+  const h = harness({ fork: { text: 'NO' }, turns: [{ type: 'turn/start', seq: 0 }] });
+  setTimeout(() => {
+    h.pushEvent({ type: 'turn/end', seq: 1 });
+    h.pushEvent({ type: 'turn/start', seq: 2 });
+  }, 60);
+
+  const result = await invoke(h, ' 条件\n执行指令');
+
+  assert.equal(result.kind, 'success');
+  assert.ok(h.forks[0].eventsAtStart.includes('turn/end:1'), 'our turn closed before the judge started');
+  assert.equal(h.followups.length, 0);
+});
+
+test('cancelling the command while it is queued starts no judge at all', async () => {
+  const h = harness({ fork: { text: 'YES' }, turns: [{ type: 'turn/start', seq: 0 }] });
+  const controller = new AbortController();
+  const pending = h.definition.handler({
+    agent: h.agent,
+    rawInput: ' 条件\n执行指令',
+    signal: controller.signal,
+  });
+  setTimeout(() => controller.abort(new Error('已取消')), 60);
+
+  await assert.rejects(pending, /已取消/);
+  assert.equal(h.forks.length, 0);
+  assert.equal(h.followups.length, 0);
+});
+
+test('an idle session is judged immediately', async () => {
+  const h = harness({ fork: { text: 'YES' }, turns: [{ type: 'turn/start', seq: 0 }, { type: 'turn/end', seq: 1 }] });
+  const result = await invoke(h, ' 条件\n执行指令');
+
+  assert.equal(result.kind, 'success');
+  assert.ok(h.forks[0].eventsAtStart.includes('turn/end:1'));
 });
 
 // ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ existing prefix is not rewritten.
 | Context-aware condition | The judge inherits the full session context (tools + system prompt + history) and answers `YES` or `NO` |
 | Reuses the KV cache | The forked judge appends one trailing user message; tools / system / messages stay byte-identical to the main request |
 | Read-only judging | The tool catalog is never trimmed (that is what keeps the prefix identical); an execution-time guard allows `read` / `glob` / `grep` and other inspection tools, and refuses writes, commands, and subagents |
+| Queues while busy | While a turn is running, `/if` waits for that turn to finish before judging, like a queued message, so a verdict never describes a stale context |
 | Send only when true | Only `YES` sends the instruction as a user message; `NO` never wakes the main agent |
 | Judgment stays out of context | Judging happens in a separate child session; no main-session event and no `agent.inject` |
 | Command arguments stay private | `recordInput: false`, so even the log-only `command/run` event omits them |
@@ -55,13 +56,13 @@ Requirements:
 Pin a version:
 
 ```text
-dsh-if@0.2.0
+dsh-if@0.2.1
 ```
 
 Equivalent CLI command:
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.2.0
+dsh plugin --profile desktop add dsh-if@0.2.1
 ```
 
 ### From GitHub
@@ -75,11 +76,11 @@ https://github.com/TLEWA/dsh-if
 Pin a tag or the release tarball:
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.0
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.1
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.2.0/dsh-if-0.2.0.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.2.1/dsh-if-0.2.1.tgz
 ```
 
 ### From source
@@ -127,19 +128,25 @@ Start executing plan A
 ## How it works
 
 1. `ctx.commands.register` registers `/if` with `recordInput: false`.
-2. **Preferred path: a forked judge.** It resolves `ctx.subagents.getProvider('fork')`
+2. **Queued behind the running turn.** A slash command is dispatched even while the model is
+   working, but at that moment a fork child can only inherit history up to the previous
+   `turn/end` — a context in which the running work has not happened yet. `/if` therefore reads
+   `session.snapshotEvents()`: while a turn is open it waits for that turn to close (up to 30
+   minutes), exactly like a queued normal message, and only then judges and delivers against the
+   finished context.
+3. **Preferred path: a forked judge.** It resolves `ctx.subagents.getProvider('fork')`
    (requiring `inheritsParentContext === true`) and starts the child with
    `startActivation({ provider: 'fork', childId, request: { parent, agentOptions, prompt }, delivery: 'caller' })`.
    The request adds only one trailing user message (judging rules + condition); tools, system
    prompt, and history are inherited verbatim, so the prefix matches the main session's next request.
-3. **Read-only at execution time.** The child inherits the full tool catalog, but a
+4. **Read-only at execution time.** The child inherits the full tool catalog, but a
    `ctx.tools.guard` guard — scoped to judge children only — allows `read` / `glob` / `grep` /
    `web_search` / `web_fetch` / `skill` and refuses every mutating or executing tool. The tool
    catalog is not filtered, so the cached prefix is unaffected.
-4. The judge times out after 60 seconds. Only on `YES`, `agent.followup(...)` appends the
+5. The judge times out after 60 seconds. Only on `YES`, `agent.followup(...)` appends the
    instruction as an identified user message with `id` and `role: 'user'`. On `NO`, the main
    agent is not touched.
-5. **Fallback path.** When the host has no prefix-inheriting fork provider, `historyTranscript()`
+6. **Fallback path.** When the host has no prefix-inheriting fork provider, `historyTranscript()`
    reads `agent.session.deriveMessages()`, keeps only user / assistant / tool messages, and
    builds a plain-text transcript of at most ~24k characters (each message clipped to 3k
    characters, keeping head and tail). One `ctx.llm.stream()` call then judges it. That request

@@ -3,6 +3,18 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-11-04
+
+Queue the judgment behind a turn that is already running.
+
+### Fixed
+
+- `/if` entered while the model was working judged a stale context: the command is dispatched
+  immediately, but a fork child inherits history only up to the previous `turn/end`, so the
+  running turn's work was invisible and the condition was answered `NO`. The command now reads
+  `session.snapshotEvents()` and waits for the open turn to close (up to 30 minutes) before
+  judging, then delivers against the finished context — the same queueing a normal message gets.
+
 ## [0.2.0] - 2026-11-04
 
 Judge with the parent session's own request prefix, and keep it read-only.

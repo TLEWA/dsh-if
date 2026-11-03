@@ -23,6 +23,7 @@
 | 上下文条件判断 | 判断器继承当前会话的完整上下文（工具 + system prompt + 历史消息），按条件回答 `YES` 或 `NO` |
 | 复用 KV 缓存 | fork 子代理只追加一条尾部 user 消息，tools / system / messages 与主会话逐字节一致，命中 provider 前缀缓存 |
 | 只读判断 | 工具目录保持不变（这正是缓存命中的前提），执行期 guard 只放行 `read` / `glob` / `grep` 等只读工具；写入、命令、子代理一律拒绝 |
+| 忙碌时排队 | 模型正在工作时，`/if` 先等到当前回合结束再判断，和普通消息一样排队，不会拿旧上下文下结论 |
 | 条件成立才发送 | 只有 `YES` 才把指令作为用户消息发给主 agent，`NO` 完全不触发主 agent |
 | 判断不进上下文 | 判断在独立子会话里完成，不写主会话事件，不调用 `agent.inject` |
 | 命令不泄露参数 | `recordInput: false`，log-only 的 `command/run` 也不记录条件或指令 |
@@ -51,13 +52,13 @@
 固定版本：
 
 ```text
-dsh-if@0.2.0
+dsh-if@0.2.1
 ```
 
 命令行等价写法：
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.2.0
+dsh plugin --profile desktop add dsh-if@0.2.1
 ```
 
 ### 从 GitHub 安装
@@ -71,11 +72,11 @@ https://github.com/TLEWA/dsh-if
 固定到标签或 Release 附件：
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.0
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.1
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.2.0/dsh-if-0.2.0.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.2.1/dsh-if-0.2.1.tgz
 ```
 
 ### 从源码安装
@@ -121,16 +122,20 @@ dsh plugin --profile desktop add .
 ## 工作方式
 
 1. `ctx.commands.register` 注册 `/if`，并设置 `recordInput: false`。
-2. **首选：fork 子代理判断。** 通过 `ctx.subagents.getProvider('fork')` 取 provider（要求
+2. **排队到当前回合结束。** 斜杠命令在模型工作时也会被立即派发，但此时 fork 子会话只能继承到上一个
+   `turn/end` 之前的历史，看到的是"正在进行的工作还没发生"的旧上下文。所以 `/if` 先读
+   `session.snapshotEvents()`：只要有未闭合的回合，就等到那个回合结束（最多 30 分钟）再判断，
+   行为和普通消息排队一致；判断和投递用的都是回合结束后的完整上下文。
+3. **首选：fork 子代理判断。** 通过 `ctx.subagents.getProvider('fork')` 取 provider（要求
    `inheritsParentContext === true`），再用 `startActivation({ provider: 'fork', childId, request: { parent, agentOptions, prompt }, delivery: 'caller' })`
    启动判断子会话。请求里只有一条尾部 user 消息（判断规则 + 条件）；tools、system prompt、历史消息全部原样继承，
    前缀与主会话下一次请求逐字节一致。
-3. **执行期只读限制。** 子会话继承完整工具目录，但 `ctx.tools.guard` 注册的 guard 只对判断子会话生效：
+4. **执行期只读限制。** 子会话继承完整工具目录，但 `ctx.tools.guard` 注册的 guard 只对判断子会话生效：
    `read` / `glob` / `grep` / `web_search` / `web_fetch` / `skill` 等只读工具放行，
    写入、修改、执行命令、子代理等一律返回拒绝文案。工具目录不裁剪，所以缓存前缀不变。
-4. 判断超时 60 秒；只有 `YES` 时调用 `agent.followup(...)`，把指令作为一条带 `id` 和 `role: 'user'` 的已识别消息
+5. 判断超时 60 秒；只有 `YES` 时调用 `agent.followup(...)`，把指令作为一条带 `id` 和 `role: 'user'` 的已识别消息
    追加到主会话；`NO` 时完全不触发主 agent。
-5. **回退路径。** host 没有可继承上下文的 fork provider 时，`historyTranscript()` 读取
+6. **回退路径。** host 没有可继承上下文的 fork provider 时，`historyTranscript()` 读取
    `agent.session.deriveMessages()`，只保留 user / assistant / tool 消息，生成最多约 24k 字符的纯文本记录
    （每条消息最多 3k 字符，保留头尾），再用 `ctx.llm.stream()` 发起一次性判断请求。
    该请求不带主会话 `sessionId`，因此命中不了主缓存，只作为兼容退路。

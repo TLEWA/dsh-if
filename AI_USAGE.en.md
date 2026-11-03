@@ -41,7 +41,7 @@ while inspecting the session log.
 
 Verified:
 
-- `node --test` / `npm test` passes 16 tests (this machine's sandbox blocks the child
+- `node --test` / `npm test` passes 20 tests (this machine's sandbox blocks the child
   processes `node --test` spawns, so the run was cross-checked in-process with
   `node test/if.test.mjs`);
 - In 0.1.0, on DSH `0.2.1-rc.5`, Windows desktop, through CDP in the real Web GUI, the
@@ -50,6 +50,11 @@ Verified:
   - `YES`: `/if 1+1=2` + `请只回复 OK` returned "条件成立，指令已作为用户消息发送。";
     a user message `请只回复 OK` and assistant reply `OK` followed;
 - The session reloads cleanly, and the followup message has `id` and `role: 'user'`.
+- On 2026-11-04, fixed "/if has no effect while the model is working": the session log
+  (`session.v4.jsonl.zstd`) showed the command is dispatched mid-turn while a fork child inherits
+  history only up to the previous `turn/end`, so the verdict described a stale context. The
+  command now reads `session.snapshotEvents()` and waits for the open turn to close before
+  judging (four new queueing/cancellation/idle cases).
 - On 2026-11-04, in the real DSH desktop, `/if 你不能看到全部上下文` exercised the 0.2.0
   forked path: the child inherited the whole parent history (~109K tokens) with the full
   tool catalog and an unchanged system prompt, and answered `YES`; the session logs show
