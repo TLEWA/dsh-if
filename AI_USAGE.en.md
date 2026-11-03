@@ -28,8 +28,8 @@ the [LICENSE](LICENSE) (MIT).
 
 | Part | AI involvement | Notes |
 | --- | --- | --- |
-| `lib/index.js` | High | `/if` command, history clipping, judge call, followup message |
-| `test/if.test.mjs` | High | registration, YES/NO, multi-line conditions, errors, cache isolation, message identity |
+| `lib/index.js` | High | `/if` command, forked judge, read-only tool guard, transcript fallback, followup message |
+| `test/if.test.mjs` | High | registration, YES/NO, multi-line conditions, errors, cache isolation, read-only guard, message identity |
 | `README*.md` / `NOTICE*.md` / this file | High | drafted by AI and updated with the code |
 | Requirements, defect judgment, final trade-offs | Human | decided by the project owner |
 
@@ -41,19 +41,23 @@ while inspecting the session log.
 
 Verified:
 
-- `npm test` passes 10 tests;
-- On DSH `0.2.1-rc.5`, Windows desktop, through CDP in the real Web GUI:
+- `node --test` / `npm test` passes 16 tests (this machine's sandbox blocks the child
+  processes `node --test` spawns, so the run was cross-checked in-process with
+  `node test/if.test.mjs`);
+- In 0.1.0, on DSH `0.2.1-rc.5`, Windows desktop, through CDP in the real Web GUI, the
+  transcript-judge path was exercised:
   - `NO`: `/if 1+1=3` + `请只回复 BAD` returned "条件不成立，未执行。"; no user message was sent;
   - `YES`: `/if 1+1=2` + `请只回复 OK` returned "条件成立，指令已作为用户消息发送。";
     a user message `请只回复 OK` and assistant reply `OK` followed;
-- The session log confirms: `command/run` has no arguments, the judge call creates no
-  session event, and the main session contains only the instruction that was actually sent;
 - The session reloads cleanly, and the followup message has `id` and `role: 'user'`.
 
 Not fully verified:
 
+- **the forked judge path has not been exercised in a real DSH GUI yet**: it is covered
+  by unit tests with mocked `ctx.subagents` / `ctx.tools`; prefix reuse and child tool
+  interception still need one confirmation in a real host;
 - every DSH version, operating system, theme, and zoom level;
-- boundary behavior when a long session hits the 24k-character clip;
+- boundary behavior when a long session hits the 24k-character clip (fallback path only);
 - combinations with other command or session-mutating plugins;
 - `reasoningEffort` compatibility for every provider (only one retry without the field is implemented).
 
@@ -69,10 +73,11 @@ Not fully verified:
 - The plugin runs locally and contains **no telemetry, analytics, or third-party remote requests**.
 - The judge sends "existing session context + condition" to the **model provider configured for
   the current session**, over the same channel as normal chat; it is not sent anywhere else.
-- The condition, instruction, and verdict are not written to the main session, but a condition
-  may contain sensitive data. Do not put anything into `/if` that you would not send to your
-  model provider.
-- The plugin does not write session logs; `command/run` and `command/done` are log-only, and
+- The forked judge runs as a host child session, so how that child is displayed and persisted is
+  up to the host; the condition, instruction, and verdict are never written to the main session.
+  A condition may contain sensitive data. Do not put anything into `/if` that you would not send
+  to your model provider.
+- The plugin itself writes no session log; `command/run` and `command/done` are log-only, and
   `recordInput: false` keeps the arguments out of `command/run`.
 
 ## 7. Recommendations

@@ -2,9 +2,25 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { apply } from '../lib/index.js';
 
-function harness({ answer = 'YES', messages = [], stream } = {}) {
+/**
+ * Build a fake DSH host.
+ *
+ * `fork === undefined` means "the host has no fork subagent provider", which
+ * exercises the transcript fallback. `fork: { text: 'YES' }` exercises the
+ * preferred forked judge.
+ */
+function harness({ answer = 'YES', messages = [], stream, fork, forkThrows, forkInherits = true } = {}) {
   let definition;
   const calls = [];
+  const forks = [];
+  const disposes = [];
+  const guardDuringJudge = [];
+  const childGuards = [];
+  let childGuardReleased = false;
+  let guard;
+  let guardRelease;
+  let createdHandler;
+
   const ctx = {
     commands: {
       register(value) {
@@ -27,7 +43,71 @@ function harness({ answer = 'YES', messages = [], stream } = {}) {
         })();
       },
     },
+    tools: {
+      guard(fn) {
+        guard = fn;
+        return () => {
+          guardRelease = true;
+        };
+      },
+    },
+    on(event, handler) {
+      if (event === 'agent/created') createdHandler = handler;
+      return () => {
+        if (createdHandler === handler) createdHandler = undefined;
+      };
+    },
   };
+
+  if (fork !== undefined) {
+    ctx.subagents = {
+      getProvider(id) {
+        return id === 'fork' ? { id, inheritsParentContext: forkInherits } : undefined;
+      },
+      async startActivation(options) {
+        if (!forkInherits) throw new Error('a non-inheriting provider must not be used');
+        forks.push(options);
+        const childAgent = {
+          id: options.childId,
+          session: { header: { id: options.childId } },
+          ctx: {
+            tools: {
+              guard(fn) {
+                childGuards.push(fn);
+                return () => {
+                  childGuardReleased = true;
+                };
+              },
+            },
+          },
+        };
+        createdHandler?.({ agent: childAgent });
+        // Tool calls from the judge child, right while it is judging. The guard
+        // must refuse mutation and allow read-only inspection, like plan mode.
+        guardDuringJudge.push({
+          ownWrite: guard?.({ agent: childAgent, name: 'write', arguments: { file_path: 'x' } }),
+          ownShell: guard?.({ agent: childAgent, name: 'pwsh', arguments: { command: 'echo hi' } }),
+          ownRead: guard?.({ agent: childAgent, name: 'read', arguments: { file_path: 'x' } }),
+          ownGrep: guard?.({ agent: { session: { header: { id: options.childId } } }, name: 'grep', arguments: {} }),
+          foreign: guard?.({ agent: { id: 'another-session' }, name: 'write', arguments: {} }),
+          // The child's own tool runtime gets the same read-only guard.
+          childWrite: childGuards[0]?.({ agent: childAgent, name: 'edit', arguments: {} }),
+          childRead: childGuards[0]?.({ agent: childAgent, name: 'glob', arguments: {} }),
+        });
+        if (forkThrows !== undefined) throw forkThrows;
+        return {
+          result: Promise.resolve({
+            stopReason: 'completed',
+            output: fork.text === undefined ? [] : [{ type: 'text', text: fork.text }],
+          }),
+          dispose: async () => {
+            disposes.push(options.childId);
+          },
+        };
+      },
+    };
+  }
+
   apply(ctx);
 
   const followups = [];
@@ -46,7 +126,19 @@ function harness({ answer = 'YES', messages = [], stream } = {}) {
     },
   };
 
-  return { definition, calls, followups, agent };
+  return {
+    definition,
+    calls,
+    forks,
+    disposes,
+    followups,
+    agent,
+    guard: () => guard,
+    guardDuringJudge,
+    childGuardArmed: () => childGuards.length,
+    childGuardReleased: () => childGuardReleased,
+    guardReleased: () => guardRelease === true,
+  };
 }
 
 function invoke(h, rawInput) {
@@ -64,7 +156,120 @@ test('registers /if with opt-out input logging', () => {
   assert.equal(typeof h.definition.description, 'string');
 });
 
-test('YES sends exactly the instruction as a user message', async () => {
+// ---------------------------------------------------------------------------
+// Preferred path: forked judge shares the main request prefix.
+// ---------------------------------------------------------------------------
+
+test('forked judge inherits the session and appends only the condition prompt', async () => {
+  const messages = [
+    { role: 'user', content: [{ type: 'text', text: '先前的用户消息' }] },
+    { role: 'assistant', content: [{ type: 'text', text: '先前的助手消息' }] },
+  ];
+  const before = JSON.stringify(messages);
+  const h = harness({ fork: { text: 'YES' }, messages });
+  const result = await invoke(h, ' 文件是否已经改好\n请运行测试');
+
+  assert.deepEqual(result, { kind: 'success', text: '条件成立，指令已作为用户消息发送。' });
+  assert.equal(h.calls.length, 0, 'the forked judge must not open a second llm stream');
+  assert.equal(h.forks.length, 1);
+
+  const request = h.forks[0];
+  assert.equal(request.provider, 'fork');
+  assert.equal(request.delivery, 'caller');
+  assert.equal(request.request.parent, h.agent);
+  assert.deepEqual(request.request.agentOptions, { maxTokens: 1024 });
+  assert.equal(request.request.prompt.length, 1, 'the only new content is one user message');
+  assert.equal(request.request.prompt[0].type, 'text');
+  assert.match(request.request.prompt[0].text, /文件是否已经改好/);
+  assert.doesNotMatch(request.request.prompt[0].text, /请运行测试/);
+
+  assert.equal(JSON.stringify(messages), before, 'history must stay untouched');
+  assert.equal(h.followups.length, 1);
+  assert.deepEqual(h.followups[0].content, [{ type: 'text', text: '请运行测试' }]);
+  assert.deepEqual(h.disposes, [request.childId], 'the judge session is disposed after judging');
+});
+
+test('forked judge NO verdict does not send the instruction', async () => {
+  const h = harness({ fork: { text: 'NO' } });
+  const result = await invoke(h, ' 用户已经吃过饭\n请再点一份');
+
+  assert.deepEqual(result, { kind: 'success', text: '条件不成立，未执行。' });
+  assert.equal(h.followups.length, 0);
+  assert.doesNotMatch(JSON.stringify(result), /已经吃过饭|再点一份/);
+  assert.equal(h.disposes.length, 1);
+});
+
+test('forked judge output with tool-call markup still yields a verdict', async () => {
+  const h = harness({ fork: { text: '<tool_call>{"name":"bash"}</tool_call>\nYES' } });
+  const result = await invoke(h, ' 条件\n执行指令');
+
+  assert.equal(result.kind, 'success');
+  assert.equal(h.followups.length, 1);
+});
+
+test('forked judge output without YES/NO is an error', async () => {
+  const h = harness({ fork: { text: 'MAYBE' } });
+  const result = await invoke(h, ' 条件\n秘密指令');
+
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /未返回 YES\/NO/);
+  assert.doesNotMatch(result.text, /秘密指令|MAYBE/);
+  assert.equal(h.followups.length, 0);
+  assert.equal(h.disposes.length, 1);
+});
+
+test('the tool guard keeps the judge child read-only, like plan mode', async () => {
+  const h = harness({ fork: { text: 'YES' } });
+  await invoke(h, ' 条件\n执行指令');
+
+  const guard = h.guard();
+  assert.equal(typeof guard, 'function');
+  const childId = h.forks[0].childId;
+
+  const seen = h.guardDuringJudge[0];
+  for (const denied of [seen.ownWrite, seen.ownShell]) {
+    assert.match(String(denied), /只读模式/, 'mutation and commands are refused');
+  }
+  assert.equal(seen.ownRead, undefined, 'read stays available');
+  assert.equal(seen.ownGrep, undefined, 'grep stays available');
+  assert.equal(seen.foreign, undefined, 'other sessions are untouched');
+  assert.match(String(seen.childWrite), /只读模式/, 'the child tool runtime is armed too');
+  assert.equal(seen.childRead, undefined);
+  assert.equal(h.childGuardArmed(), 1);
+  assert.equal(h.childGuardReleased(), true, 'the child guard is released when judging ends');
+
+  // Ownership is released when the judge returns, so a stale child id can no
+  // longer be attributed to this plugin.
+  assert.equal(guard({ agent: { id: childId }, name: 'write' }), undefined);
+  assert.equal(guard({ agent: undefined, name: 'write' }), undefined);
+  assert.equal(guard({ agent: { id: childId } }), undefined);
+});
+
+test('a fork provider without prefix inheritance falls back to the transcript judge', async () => {
+  const h = harness({ answer: 'YES', fork: { text: 'YES' }, forkInherits: false });
+  const result = await invoke(h, ' 条件\n执行指令');
+
+  assert.equal(result.kind, 'success');
+  assert.equal(h.forks.length, 0, 'the non-inheriting provider is never used');
+  assert.equal(h.calls.length, 1, 'the fallback transcript judge runs');
+  assert.equal(h.followups.length, 1);
+});
+
+test('a failing fork activation surfaces as a judge error and disposes', async () => {
+  const h = harness({ fork: { text: 'YES' }, forkThrows: new Error('fork unavailable') });
+  const result = await invoke(h, ' 条件\n执行指令');
+
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /条件判断失败/);
+  assert.match(result.text, /fork unavailable/);
+  assert.equal(h.followups.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Fallback path: one-shot request with a bounded text transcript.
+// ---------------------------------------------------------------------------
+
+test('fallback YES sends exactly the instruction as a user message', async () => {
   const h = harness({ answer: 'YES' });
   const result = await invoke(h, ' 1+1=2\n请回复 OK');
 
@@ -84,7 +289,7 @@ test('YES sends exactly the instruction as a user message', async () => {
   assert.doesNotMatch(judgePrompt, /请回复 OK/);
 });
 
-test('judge call is isolated and leaves existing history untouched', async () => {
+test('fallback judge call is isolated and leaves existing history untouched', async () => {
   const messages = [
     { role: 'user', content: [{ type: 'text', text: '先前的用户消息' }] },
     { role: 'assistant', content: [{ type: 'text', text: '先前的助手消息' }] },
@@ -98,15 +303,6 @@ test('judge call is isolated and leaves existing history untouched', async () =>
   assert.equal(h.calls[0].sessionId, undefined);
   assert.equal(JSON.stringify(messages), before);
   assert.equal(h.followups.length, 1);
-});
-
-test('NO does nothing and never leaks the condition or judge output', async () => {
-  const h = harness({ answer: 'NO' });
-  const result = await invoke(h, ' 用户已经吃过饭\n请再点一份');
-
-  assert.deepEqual(result, { kind: 'success', text: '条件不成立，未执行。' });
-  assert.equal(h.followups.length, 0);
-  assert.doesNotMatch(JSON.stringify(result), /已经吃过饭|再点一份/);
 });
 
 test('--- separates a multi-line condition from the instruction', async () => {
@@ -126,6 +322,7 @@ test('message with no second line is rejected', async () => {
   assert.equal(result.kind, 'error');
   assert.match(result.text, /用法/);
   assert.equal(h.calls.length, 0);
+  assert.equal(h.forks.length, 0);
   assert.equal(h.followups.length, 0);
 });
 

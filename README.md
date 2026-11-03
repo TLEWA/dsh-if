@@ -9,21 +9,25 @@
 
 给 [DeepSeek Harness](https://github.com/deepseek-ai)（DSH）加一个自定义 `/if` 命令：
 
-> 先用一次独立的 LLM 调用，根据**先前的对话上下文**判断条件是否成立；
-> 成立时，把下方的指令作为一条普通用户消息发给主 agent；不成立时什么都不做。
+> 先判断条件是否成立：判断器是一个 **fork 子代理**，继承当前会话的工具、system prompt 与消息历史，
+> 只在末尾追加一条判断指令；成立时，把下方的指令作为一条普通用户消息发给主 agent；不成立时什么都不做。
 
-`/if` 命令、条件、判断用的 prompt 和判断结果**都不会进入主 agent 的上下文**。
-条件成立时，主会话只在历史末尾多一条普通用户消息，不会改写已有前缀。
+判断请求与主会话的下一次请求共享同一个前缀（tools → system → messages 逐字节一致），
+因此能复用 provider 的 prompt cache / KV cache。`/if` 命令、条件、判断用的 prompt 和判断结果
+**都不会写进主会话**；条件成立时，主会话只在历史末尾多一条普通用户消息，不会改写已有前缀。
 
 ## 功能
 
 | 能力 | 行为 |
 | --- | --- |
-| 上下文条件判断 | 判断器读取当前会话已有的 user / assistant / tool 消息，按条件回答 `YES` 或 `NO` |
+| 上下文条件判断 | 判断器继承当前会话的完整上下文（工具 + system prompt + 历史消息），按条件回答 `YES` 或 `NO` |
+| 复用 KV 缓存 | fork 子代理只追加一条尾部 user 消息，tools / system / messages 与主会话逐字节一致，命中 provider 前缀缓存 |
+| 只读判断 | 工具目录保持不变（这正是缓存命中的前提），执行期 guard 只放行 `read` / `glob` / `grep` 等只读工具；写入、命令、子代理一律拒绝 |
 | 条件成立才发送 | 只有 `YES` 才把指令作为用户消息发给主 agent，`NO` 完全不触发主 agent |
-| 判断不进上下文 | 判断是独立请求，不带主会话 `sessionId`，不追加 session 事件，不调用 `agent.inject` |
+| 判断不进上下文 | 判断在独立子会话里完成，不写主会话事件，不调用 `agent.inject` |
 | 命令不泄露参数 | `recordInput: false`，log-only 的 `command/run` 也不记录条件或指令 |
 | 多行条件 | 第一行是条件，其余行是指令；条件有多行时用单独一行 `---` 分隔 |
+| 自动回退 | host 没有可继承上下文的 fork provider 时，回退到一次性 `ctx.llm.stream` + 约 24k 字符纯文本记录 |
 | 防止误发 | 条件为空、指令为空、判断输出不是 `YES` / `NO`、或判断超时，都返回错误且不发送 |
 
 ## 安装
@@ -47,13 +51,13 @@
 固定版本：
 
 ```text
-dsh-if@0.1.0
+dsh-if@0.2.0
 ```
 
 命令行等价写法：
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.1.0
+dsh plugin --profile desktop add dsh-if@0.2.0
 ```
 
 ### 从 GitHub 安装
@@ -67,11 +71,11 @@ https://github.com/TLEWA/dsh-if
 固定到标签或 Release 附件：
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.1.0
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.0
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.1.0/dsh-if-0.1.0.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.2.0/dsh-if-0.2.0.tgz
 ```
 
 ### 从源码安装
@@ -110,20 +114,26 @@ dsh plugin --profile desktop add .
 - 判断由当前会话配置的模型完成，不是 JavaScript 或数学求值器。
   `1+1=2` 只是最小示例；条件可以是“用户是否已经确认方案”“上一条回复是否包含错误”等。
 - 判断器只被要求输出 `YES` 或 `NO`。输出里没有可识别结果时按判断失败处理，不发送指令。
-- 条件需要的信息如果不在最近约 24k 字符的上下文里，会被判为不成立：宁可不动，也不误发指令。
+- 判断器可以只读地查看文件、检索代码来确认事实（`read` / `glob` / `grep` 等），但不能做任何修改。
+- 条件需要的信息在当前上下文里找不到、或者条件含糊无法确定时，判为不成立：宁可不动，也不误发指令。
 - UI 只显示通用结果，不回显条件、指令或判断原文。
 
 ## 工作方式
 
 1. `ctx.commands.register` 注册 `/if`，并设置 `recordInput: false`。
-2. `historyTranscript()` 读取 `agent.session.deriveMessages()`，只保留 user / assistant / tool 消息，
-   生成最多约 24k 字符的纯文本记录（每条消息最多 3k 字符，保留头尾）。system / developer 消息不进入判断 prompt。
-3. `ctx.llm.stream()` 发起独立判断请求，system prompt 要求只输出 `YES` 或 `NO`，并把对话记录明确标为数据。
-   优先使用 `agent.options` 的 provider/model，缺失时回退到 `session.requestHeader()?.config`，
-   再回退到 `llm.listProviders()` / `listModels()`。默认 `reasoningEffort: 'off'`；
-   provider 不支持时自动去掉该参数重试一次。超时 30 秒。
-4. 只有 `YES` 时调用 `agent.followup(...)`，把指令作为一条带 `id` 和 `role: 'user'` 的已识别消息
+2. **首选：fork 子代理判断。** 通过 `ctx.subagents.getProvider('fork')` 取 provider（要求
+   `inheritsParentContext === true`），再用 `startActivation({ provider: 'fork', childId, request: { parent, agentOptions, prompt }, delivery: 'caller' })`
+   启动判断子会话。请求里只有一条尾部 user 消息（判断规则 + 条件）；tools、system prompt、历史消息全部原样继承，
+   前缀与主会话下一次请求逐字节一致。
+3. **执行期只读限制。** 子会话继承完整工具目录，但 `ctx.tools.guard` 注册的 guard 只对判断子会话生效：
+   `read` / `glob` / `grep` / `web_search` / `web_fetch` / `skill` 等只读工具放行，
+   写入、修改、执行命令、子代理等一律返回拒绝文案。工具目录不裁剪，所以缓存前缀不变。
+4. 判断超时 60 秒；只有 `YES` 时调用 `agent.followup(...)`，把指令作为一条带 `id` 和 `role: 'user'` 的已识别消息
    追加到主会话；`NO` 时完全不触发主 agent。
+5. **回退路径。** host 没有可继承上下文的 fork provider 时，`historyTranscript()` 读取
+   `agent.session.deriveMessages()`，只保留 user / assistant / tool 消息，生成最多约 24k 字符的纯文本记录
+   （每条消息最多 3k 字符，保留头尾），再用 `ctx.llm.stream()` 发起一次性判断请求。
+   该请求不带主会话 `sessionId`，因此命中不了主缓存，只作为兼容退路。
 
 ## KV 缓存与上下文隔离
 
@@ -131,7 +141,11 @@ dsh plugin --profile desktop add .
 
 - `/if` 命令、条件、指令、判断 prompt、判断结果都不写入主会话；
   `command/run` 和 `command/done` 是 log-only 事件，不进入模型请求。
-- 判断调用是**独立请求**，不带主会话的 `sessionId`，不追加任何 session 事件；它只读历史，不修改历史。
+- 判断在 **fork 子代理**里完成：tools、system prompt、历史消息全部继承，只在末尾追加一条 user 消息。
+  因此判断请求的前缀与主会话下一次请求逐字节一致，provider 的 prefix cache / KV cache 可以直接复用，
+  不会因为一次判断而让整段上下文重新计费。
+- 判断子会话是独立会话，不追加主会话的 session 事件，只读历史；工具目录也不裁剪
+  （裁剪工具定义会改变前缀，反而破坏缓存），只读限制放在执行期 guard。
 - 条件不成立（`NO`）时，主会话没有任何变化。
 - 条件成立（`YES`）时，唯一的改动是通过 `agent.followup` 在历史**末尾追加**一条普通用户消息。
   之前的消息、system prompt、工具声明都不变，因此主请求的可复用前缀保持字节一致，
@@ -142,7 +156,7 @@ dsh plugin --profile desktop add .
 
 - 已在 DSH `0.2.1-rc.5`、Windows 桌面端验证；
 - 命令使用 `@deepseek-ai/dsh-commands` 的公开注册接口；
-- 判断使用 `ctx.llm.stream` 的公开接口；
+- 判断优先使用 `ctx.subagents` 的 `fork` provider + `ctx.tools.guard`；host 不提供时自动回退到 `ctx.llm.stream`；
 - 不依赖客户端 bundle，不需要构建步骤。
 
 ## 测试
@@ -151,17 +165,20 @@ dsh plugin --profile desktop add .
 npm test
 ```
 
-测试使用 mock 的 `ctx.commands`、`ctx.llm` 和 `agent`，覆盖：
+测试使用 mock 的 `ctx.commands`、`ctx.llm`、`ctx.subagents`、`ctx.tools` 和 `agent`，覆盖：
 
 - 注册信息与 `recordInput: false`
+- fork 判断只追加一条尾部消息、`agentOptions.maxTokens` 收敛、子会话被释放
 - `YES` 只发送指令、`NO` 不发送
+- 判断输出里的 tool-call 标记会被剥离，`MAYBE` 之类的输出按失败处理
+- guard 只拦判断子会话：`write` / `pwsh` 被拒，`read` / `grep` 放行，其它会话不受影响，判断结束即释放归属
+- 没有可继承上下文的 fork provider 时回退到 transcript 判断，且绝不复用不继承前缀的 provider
+- fork 启动失败时返回判断错误且不发送指令
 - `---` 多行条件
 - 缺少指令 / 空指令
 - 过滤 system / developer 消息
-- 无法识别的判断结果
 - 不支持 `reasoningEffort` 时的重试
 - 判断 prompt 不含指令，结果文本不含条件或判断原文
-- 判断调用不携带 `sessionId`，且不会修改既有历史
 - 发送的指令消息带 `id` 和 `role: 'user'`，持久化 session 可以正常重载
 
 ## 隐私
@@ -172,8 +189,10 @@ npm test
 
 ## 已知限制
 
-- 判断器看到的是纯文本记录，图片和文件只显示 `[图片]` / `[文件]` 占位符。
-- 条件需要的信息如果不在最近约 24k 字符的记录里，会被判为不成立。
+- 判断子会话会短暂出现在 DSH 的子代理列表里（label 为 `if judge`），判断结束即释放。
+- 只读白名单是静态名单：未列出的工具（包括 MCP 只读工具）会被拒绝；需要放宽时请提 issue。
+- 回退路径（host 没有 fork provider）看到的是纯文本记录，图片和文件只显示 `[图片]` / `[文件]` 占位符，
+  条件需要的信息如果不在最近约 24k 字符的记录里，会被判为不成立。
 - 判断使用当前会话的 provider/model；当前会话没有可用路由时返回错误。
 - UI 结果是通用的，不展示条件和判断理由；需要排查时请查看 DSH 日志或会话事件。
 - 该命令适合“条件明确、指令单一”的场景；需要复杂分支时，建议直接用普通对话。

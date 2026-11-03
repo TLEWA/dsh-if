@@ -3,6 +3,29 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-11-04
+
+Judge with the parent session's own request prefix, and keep it read-only.
+
+### Added
+
+- The condition is now judged by a **forked subagent** (`ctx.subagents`, provider `fork`):
+  tools, system prompt, and message history are inherited verbatim and the judge adds only one
+  trailing user message. The prefix is byte-identical to the main session's next request, so the
+  provider's prompt cache / KV cache is reused instead of re-paying for the whole context.
+- An execution-time tool guard (`ctx.tools.guard`) keeps the judge read-only: `read`, `glob`,
+  `grep`, `web_search`, `web_fetch`, `skill` and other inspection tools are allowed; writes,
+  edits, commands, jobs, and subagents are refused. The tool catalog is never filtered — the
+  same trade-off DSH plan mode makes for request-cache stability.
+- Automatic fallback to the previous one-shot transcript judge when the host exposes no
+  prefix-inheriting `fork` provider.
+
+### Changed
+
+- Judge timeout raised from 30s to 60s; the forked judge gets a 1024-token output budget per turn
+  so a read call plus the verdict fit.
+- `inject` now declares `subagents` and `tools` in addition to `commands` and `llm`.
+
 ## [0.1.0] - 2026-11-04
 
 First public release.
