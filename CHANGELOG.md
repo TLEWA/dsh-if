@@ -3,6 +3,14 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-11-04
+
+### Fixed
+
+- The queueing wait used an unref'd timer, so a process with no other pending work
+  (notably `node --test` on Node 20) could exit while the command was still waiting.
+  The timer is now ref'd; behaviour on a live host is unchanged.
+
 ## [0.2.1] - 2026-11-04
 
 Queue the judgment behind a turn that is already running.

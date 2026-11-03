@@ -56,13 +56,13 @@ Requirements:
 Pin a version:
 
 ```text
-dsh-if@0.2.1
+dsh-if@0.2.2
 ```
 
 Equivalent CLI command:
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.2.1
+dsh plugin --profile desktop add dsh-if@0.2.2
 ```
 
 ### From GitHub
@@ -76,11 +76,11 @@ https://github.com/TLEWA/dsh-if
 Pin a tag or the release tarball:
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.1
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.2
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.2.1/dsh-if-0.2.1.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.2.2/dsh-if-0.2.2.tgz
 ```
 
 ### From source
