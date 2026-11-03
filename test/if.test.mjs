@@ -9,8 +9,19 @@ import { apply } from '../lib/index.js';
  * exercises the transcript fallback. `fork: { text: 'YES' }` exercises the
  * preferred forked judge.
  */
-function harness({ answer = 'YES', messages = [], turns = [], stream, fork, forkThrows, forkInherits = true } = {}) {
+function harness({
+  answer = 'YES',
+  messages = [],
+  turns = [],
+  stream,
+  fork,
+  forkThrows,
+  forkInherits = true,
+  inherited = [],
+  config = { mode: 'background' },
+} = {}) {
   let definition;
+  let preStepHandler;
   const calls = [];
   const forks = [];
   const disposes = [];
@@ -22,6 +33,7 @@ function harness({ answer = 'YES', messages = [], turns = [], stream, fork, fork
   let guard;
   let guardRelease;
   let createdHandler;
+  let lastChildInbox;
 
   const ctx = {
     effect(fn) {
@@ -58,8 +70,10 @@ function harness({ answer = 'YES', messages = [], turns = [], stream, fork, fork
     },
     on(event, handler) {
       if (event === 'agent/created') createdHandler = handler;
+      if (event === 'agent/pre-step') preStepHandler = handler;
       return () => {
         if (createdHandler === handler) createdHandler = undefined;
+        if (preStepHandler === handler) preStepHandler = undefined;
       };
     },
   };
@@ -72,9 +86,25 @@ function harness({ answer = 'YES', messages = [], turns = [], stream, fork, fork
       async startActivation(options) {
         if (!forkInherits) throw new Error('a non-inheriting provider must not be used');
         forks.push({ ...options, eventsAtStart: events.map((event) => `${event.type}:${event.seq}`) });
+        // The parent log can carry queued next-turn messages inside the seeded
+        // prefix; the child starts with those copied into its own inbox.
+        const childInbox = {
+          nextTurn: inherited.map((item) => ({
+            id: item.id,
+            role: 'user',
+            content: [{ type: 'text', text: item.text }],
+          })),
+          removed: [],
+          remove(id) {
+            this.removed.push(id);
+            this.nextTurn = this.nextTurn.filter((message) => message.id !== id);
+          },
+        };
+        lastChildInbox = childInbox;
         const childAgent = {
           id: options.childId,
           session: { header: { id: options.childId } },
+          inbox: childInbox,
           ctx: {
             tools: {
               guard(fn) {
@@ -113,10 +143,10 @@ function harness({ answer = 'YES', messages = [], turns = [], stream, fork, fork
     };
   }
 
-  apply(ctx);
+  apply(ctx, config);
 
   const followups = [];
-  const agent = {
+  const parentAgent = {
     options: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high' },
     session: {
       deriveMessages() {
@@ -140,14 +170,23 @@ function harness({ answer = 'YES', messages = [], turns = [], stream, fork, fork
     forks,
     disposes,
     followups,
-    agent,
+    agent: parentAgent,
     events: () => events,
     pushEvent: (event) => events.push(event),
     guard: () => guard,
     guardDuringJudge,
     childGuardArmed: () => childGuards.length,
     childGuardReleased: () => childGuardReleased,
+    childInbox: () => lastChildInbox,
     guardReleased: () => guardRelease === true,
+    /** Run the loop's `agent/pre-step` waterfall over a claimed batch. */
+    preStep(batch, { agent = parentAgent, signal = new AbortController().signal } = {}) {
+      assert.equal(typeof preStepHandler, 'function', 'the plugin must register agent/pre-step');
+      return preStepHandler({ agent, messages: batch, step: 0, signal }, async () => ({
+        kind: 'enter',
+        messages: batch,
+      }));
+    },
     dispose() {
       for (const fn of effects) {
         const cleanup = fn();
@@ -226,6 +265,26 @@ test('forked judge inherits the session and appends only the condition prompt', 
   assert.equal(h.followups.length, 1);
   assert.deepEqual(h.followups[0].content, [{ type: 'text', text: '请运行测试' }]);
   assert.deepEqual(h.disposes, [request.childId], 'the judge session is disposed after judging');
+});
+
+test('the forked judge drops work inherited from the parent queue', async () => {
+  const h = harness({
+    fork: { text: 'YES' },
+    inherited: [
+      // Appended before the parent's turn closed, so the fork seed carries it.
+      { id: 'reminder-1', text: '[meow-memory-reflect] 记忆反思任务' },
+      { id: 'judge-1', text: '【/if 条件判断】\n不是继承来的工作' },
+    ],
+  });
+  const result = await invoke(h, ' 已经写完\n回复一句：好');
+
+  assert.deepEqual(result, { kind: 'success', text: '条件成立，指令已作为用户消息发送。' });
+  assert.deepEqual(h.childInbox().removed, ['reminder-1'], 'only the inherited work is dropped');
+  assert.deepEqual(
+    h.childInbox().nextTurn.map((message) => message.id),
+    ['judge-1'],
+    'the judge prompt itself stays queued',
+  );
 });
 
 test('forked judge NO verdict does not send the instruction', async () => {
@@ -488,4 +547,56 @@ test('a provider without reasoningEffort support is retried once', async () => {
   assert.equal(h.calls[0].reasoningEffort, 'off');
   assert.equal(h.calls[1].reasoningEffort, undefined);
   assert.equal(h.followups.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Default mode: the /if line joins the composer's queue as a normal message.
+// ---------------------------------------------------------------------------
+
+test('by default the command queues itself as an ordinary user message', async () => {
+  const h = harness({ fork: { text: 'YES' }, config: null });
+  const result = await invoke(h, ' 条件\n执行指令');
+
+  assert.deepEqual(result, { kind: 'success', text: '已排队：与普通消息同一队列，轮次开始时判断。' });
+  assert.equal(h.forks.length, 0, 'queueing must not judge before the turn boundary');
+  assert.equal(h.followups.length, 1);
+  assert.equal(h.followups[0].role, 'user');
+  assert.equal(h.followups[0].content[0].text, '/if 条件\n执行指令');
+});
+
+test('a claimed /if line is replaced by its instruction before the step opens', async () => {
+  const h = harness({ fork: { text: 'YES' }, config: null });
+  const normal = { id: 'm0', role: 'user', content: [{ type: 'text', text: '普通消息' }] };
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 文件是否已经改好\n请运行测试' }] };
+
+  const decision = await h.preStep([normal, queued]);
+
+  assert.equal(decision.kind, 'enter');
+  assert.equal(decision.messages.length, 2);
+  assert.equal(decision.messages[0], normal);
+  assert.equal(decision.messages[1].id, 'm1');
+  assert.deepEqual(decision.messages[1].content, [{ type: 'text', text: '请运行测试' }]);
+  assert.equal(h.forks.length, 1);
+  assert.match(h.forks[0].request.prompt[0].text, /文件是否已经改好/);
+});
+
+test('a NO verdict drops the queued line so the turn opens no step', async () => {
+  const h = harness({ fork: { text: 'NO' }, config: null });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n秘密指令' }] };
+
+  const decision = await h.preStep([queued]);
+
+  assert.equal(decision.kind, 'enter');
+  assert.deepEqual(decision.messages, []);
+  assert.doesNotMatch(JSON.stringify(decision), /秘密指令/);
+});
+
+test('an ordinary message is never judged at the turn boundary', async () => {
+  const h = harness({ fork: { text: 'YES' }, config: null });
+  const normal = { id: 'm0', role: 'user', content: [{ type: 'text', text: '顺便问一句' }] };
+
+  const decision = await h.preStep([normal]);
+
+  assert.deepEqual(decision.messages, [normal]);
+  assert.equal(h.forks.length, 0);
 });

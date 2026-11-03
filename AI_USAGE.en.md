@@ -41,7 +41,7 @@ while inspecting the session log.
 
 Verified:
 
-- `node --test` / `npm test` passes 20 tests (this machine's sandbox blocks the child
+- `node --test` / `npm test` passes 26 tests (this machine's sandbox blocks the child
   processes `node --test` spawns, so the run was cross-checked in-process with
   `node test/if.test.mjs`);
 - In 0.1.0, on DSH `0.2.1-rc.5`, Windows desktop, through CDP in the real Web GUI, the
@@ -59,6 +59,11 @@ Verified:
   forked path: the child inherited the whole parent history (~109K tokens) with the full
   tool catalog and an unchanged system prompt, and answered `YES`; the session logs show
   the main session received no judge messages (all of them live in the separate child).
+- On 2026-11-04, `mode: message` queueing was verified in the real desktop: `/if` appeared in
+  the queue dock above the composer as an ordinary user message (with edit / remove / steer),
+  the command returned in 1 ms, and the composer stayed free. The same round exposed the
+  "fork child inherits the parent's queued work" bug; its fix (`dropInheritedInbox`) is covered
+  by unit tests and still awaits a real-GUI re-check after restarting the desktop app.
 
 Not fully verified:
 

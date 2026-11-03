@@ -23,7 +23,8 @@
 | 上下文条件判断 | 判断器继承当前会话的完整上下文（工具 + system prompt + 历史消息），按条件回答 `YES` 或 `NO` |
 | 复用 KV 缓存 | fork 子代理只追加一条尾部 user 消息，tools / system / messages 与主会话逐字节一致，命中 provider 前缀缓存 |
 | 只读判断 | 工具目录保持不变（这正是缓存命中的前提），执行期 guard 只放行 `read` / `glob` / `grep` 等只读工具；写入、命令、子代理一律拒绝 |
-| 忙碌时排队 | 模型正在工作时，`/if` 立即返回、不占用输入框，再等到当前回合结束才判断，不会拿旧上下文下结论 |
+| 与普通消息同队列 | 模型工作时，`/if` 作为一条普通消息进入输入框上方的队列面板：可以编辑、删除、↑ 插话；回合开始时才判断，成立就把这条消息原地换成指令 |
+| 两种排队模式 | 默认 `message`（与普通消息同队列）；`background` 保留 0.2.x 的行为：命令立即返回，判断在后台跑 |
 | 条件成立才发送 | 只有 `YES` 才把指令作为用户消息发给主 agent，`NO` 完全不触发主 agent |
 | 判断不进上下文 | 判断在独立子会话里完成，不写主会话事件，不调用 `agent.inject` |
 | 命令不泄露参数 | `recordInput: false`，log-only 的 `command/run` 也不记录条件或指令 |
@@ -52,13 +53,13 @@
 固定版本：
 
 ```text
-dsh-if@0.2.4
+dsh-if@0.3.0
 ```
 
 命令行等价写法：
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.2.4
+dsh plugin --profile desktop add dsh-if@0.3.0
 ```
 
 ### 从 GitHub 安装
@@ -72,11 +73,11 @@ https://github.com/TLEWA/dsh-if
 固定到标签或 Release 附件：
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.4
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.0
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.2.4/dsh-if-0.2.4.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.3.0/dsh-if-0.3.0.tgz
 ```
 
 ### 从源码安装
@@ -119,27 +120,53 @@ dsh plugin --profile desktop add .
 - 条件需要的信息在当前上下文里找不到、或者条件含糊无法确定时，判为不成立：宁可不动，也不误发指令。
 - UI 只显示通用结果，不回显条件、指令或判断原文。
 
+## 配置
+
+```yaml
+# profile 的 cordis.patch.yml
+- id: if-command
+  name: 'dsh-if'
+  config:
+    mode: message     # 默认。background = 0.2.x 的老行为
+```
+
+- `mode: message`（默认）：`/if` 先作为一条普通用户消息排队，等轮次真正开始时再判断。
+  条目的内容是 `/if <条件>` + 指令原文，出现在输入框上方的队列面板里，编辑它即等同改条件与指令。
+- `mode: background`：0.2.x 行为。命令立即返回“已排队”，判断丢给后台任务，判断过程不占队列。
+  适合不想让判断占用一轮队列位置的场景。
+
+插件不导出 `Config` schema，宿主会把 patch 里的 `config` 原样传给 `apply(ctx, config)`，
+未知字段被忽略，`mode` 缺省即为 `message`。
+
 ## 工作方式
 
 1. `ctx.commands.register` 注册 `/if`，并设置 `recordInput: false`。
-2. **排队到当前回合结束。** 斜杠命令在模型工作时也会被立即派发，但此时 fork 子会话只能继承到上一个
-   `turn/end` 之前的历史，看到的是"正在进行的工作还没发生"的旧上下文。所以 `/if` 先读
-   `session.snapshotEvents()`：只要有未闭合的回合，就把判断交给后台任务（命令立刻返回"已排队"，
-   输入框不被占用），等那个回合结束（最多 30 分钟）再判断。判断和投递用的都是回合结束后的完整上下文，
-   所以下一个回合开始时，指令和普通消息一样排在队列里等待。
-3. **首选：fork 子代理判断。** 通过 `ctx.subagents.getProvider('fork')` 取 provider（要求
+2. **入队。** `message` 模式下，命令立即把原文 `/if <条件>\n<指令>` 作为一条普通 user 消息
+   `agent.followup()` 到会话队列：它进的是宿主 durable inbox，所以客户端排队面板照常显示、
+   照常可编辑 / 删除 / 插话，输入框也不再被命令占住。
+3. **轮次边界拦截。** 回合开始时宿主按 `agent/pre-step` waterfall 领取这批消息；插件拿到 claim 到的
+   批次后，把以 `/if` 开头的条目挑出来：`/if` 原文不会进入模型历史，而是先在原地判断——
+   成立就把这条消息的 content 换成指令，不成立就从批次里删掉。整批都被删光时宿主不会打开步骤，
+   回合一秒空转结束，界面上只是队列条目消失。
+4. **首选：fork 子代理判断。** 通过 `ctx.subagents.getProvider('fork')` 取 provider（要求
    `inheritsParentContext === true`），再用 `startActivation({ provider: 'fork', childId, request: { parent, agentOptions, prompt }, delivery: 'caller' })`
    启动判断子会话。请求里只有一条尾部 user 消息（判断规则 + 条件）；tools、system prompt、历史消息全部原样继承，
    前缀与主会话下一次请求逐字节一致。
-4. **执行期只读限制。** 子会话继承完整工具目录，但 `ctx.tools.guard` 注册的 guard 只对判断子会话生效：
+5. **丢掉继承来的待办。** fork 的种子是父会话到最后一个 `turn/end` 为止的全部事件，而 turn 结束前
+   入队的 next-turn 消息也落在里面。子会话会把它们当成自己的任务先跑一遍（判断结果就会错位到别的回合）。
+   所以拿到子 agent 的那一刻，插件把子会话 inbox 里除自己判断 prompt 以外的待办全部 `remove` 掉；
+   父会话的队列不受影响。
+6. **执行期只读限制。** 子会话继承完整工具目录，但 `ctx.tools.guard` 注册的 guard 只对判断子会话生效：
    `read` / `glob` / `grep` / `web_search` / `web_fetch` / `skill` 等只读工具放行，
    写入、修改、执行命令、子代理等一律返回拒绝文案。工具目录不裁剪，所以缓存前缀不变。
-5. 判断超时 60 秒；只有 `YES` 时调用 `agent.followup(...)`，把指令作为一条带 `id` 和 `role: 'user'` 的已识别消息
-   追加到主会话；`NO` 时完全不触发主 agent。
-6. **回退路径。** host 没有可继承上下文的 fork provider 时，`historyTranscript()` 读取
+7. 判断超时 60 秒；只有 `YES` 时把指令作为一条带 `id` 和 `role: 'user'` 的已识别消息交给主 agent；
+   `NO` 时这条排队消息被丢弃，完全不触发主 agent。
+8. **回退路径。** host 没有可继承上下文的 fork provider 时，`historyTranscript()` 读取
    `agent.session.deriveMessages()`，只保留 user / assistant / tool 消息，生成最多约 24k 字符的纯文本记录
    （每条消息最多 3k 字符，保留头尾），再用 `ctx.llm.stream()` 发起一次性判断请求。
    该请求不带主会话 `sessionId`，因此命中不了主缓存，只作为兼容退路。
+9. **`background` 模式**跳过第 2、3 步：命令读 `session.snapshotEvents()`，只要有未闭合的回合，
+   就把判断交给后台任务并立刻返回"已排队"；回合结束（最多等 30 分钟）后再判断、再 `followup`。
 
 ## KV 缓存与上下文隔离
 
@@ -180,6 +207,9 @@ npm test
 - `YES` 只发送指令、`NO` 不发送
 - 判断输出里的 tool-call 标记会被剥离，`MAYBE` 之类的输出按失败处理
 - guard 只拦判断子会话：`write` / `pwsh` 被拒，`read` / `grep` 放行，其它会话不受影响，判断结束即释放归属
+- fork 子会话会丢弃从父会话队列继承来的待办，只留自己的判断 prompt
+- `mode: message`：默认把命令转成普通排队消息；轮次边界把 `/if` 换成指令、`NO` 时丢弃、普通消息不判断
+- `mode: background`：忙碌时立即返回"已排队"，回合结束后台判断
 - 没有可继承上下文的 fork provider 时回退到 transcript 判断，且绝不复用不继承前缀的 provider
 - fork 启动失败时返回判断错误且不发送指令
 - `---` 多行条件
@@ -200,8 +230,10 @@ npm test
 - 判断在宿主里是一个真实的子代理回合：桌面端会在会话时间线上显示一张子代理卡片
   （label 为 `if judge`，含耗时、费用与 token 用量），判断结束即释放。主会话的消息列表
   不会因此多出任何 judge 消息——那张卡片属于独立子会话。
-- `/if` 排队时不会出现在输入框上方的"排队消息"面板里：那是客户端的本地发件箱，斜杠命令会被立即派发，
-  插件没有办法往里塞条目，所以也不能在那里面编辑、删除或"强制推送"。命令节点自己会显示"已排队"。
+- `/if` 在排队面板里是一条普通用户消息的副本：内容是 `/if <条件>` + 指令原文。它会在回合开始前被
+  替换成指令（成立）或丢弃（不成立），所以不会出现在模型历史里；编辑它就等于同时改条件与指令。
+- 如果判断失败（超时、输出不可解析、没有可用路由），这条排队消息同样会被丢弃，只在日志里留一条 warning，
+  界面不会额外提示；需要排查时看会话事件里的 `command/done` 与 DSH 日志。
 - 只读白名单是静态名单：未列出的工具（包括 MCP 只读工具）会被拒绝；需要放宽时请提 issue。
 - 回退路径（host 没有 fork provider）看到的是纯文本记录，图片和文件只显示 `[图片]` / `[文件]` 占位符，
   条件需要的信息如果不在最近约 24k 字符的记录里，会被判为不成立。

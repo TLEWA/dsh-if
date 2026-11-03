@@ -27,7 +27,8 @@ existing prefix is not rewritten.
 | Context-aware condition | The judge inherits the full session context (tools + system prompt + history) and answers `YES` or `NO` |
 | Reuses the KV cache | The forked judge appends one trailing user message; tools / system / messages stay byte-identical to the main request |
 | Read-only judging | The tool catalog is never trimmed (that is what keeps the prefix identical); an execution-time guard allows `read` / `glob` / `grep` and other inspection tools, and refuses writes, commands, and subagents |
-| Queues while busy | While a turn is running, `/if` returns at once without blocking the composer and judges once that turn finishes, like a queued message, so a verdict never describes a stale context |
+| Shares the queue | While a turn runs, `/if` queues itself as an ordinary message in the composer's queue dock — editable, removable, steerable — and is judged when the turn opens; a `YES` turns that very message into the instruction |
+| Two queueing modes | `message` (default) shares the queue; `background` keeps the 0.2.x behavior: the command returns at once and judges in a background task |
 | Send only when true | Only `YES` sends the instruction as a user message; `NO` never wakes the main agent |
 | Judgment stays out of context | Judging happens in a separate child session; no main-session event and no `agent.inject` |
 | Command arguments stay private | `recordInput: false`, so even the log-only `command/run` event omits them |
@@ -56,13 +57,13 @@ Requirements:
 Pin a version:
 
 ```text
-dsh-if@0.2.4
+dsh-if@0.3.0
 ```
 
 Equivalent CLI command:
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.2.4
+dsh plugin --profile desktop add dsh-if@0.3.0
 ```
 
 ### From GitHub
@@ -76,11 +77,11 @@ https://github.com/TLEWA/dsh-if
 Pin a tag or the release tarball:
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.2.4
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.0
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.2.4/dsh-if-0.2.4.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.3.0/dsh-if-0.3.0.tgz
 ```
 
 ### From source
@@ -125,33 +126,63 @@ Start executing plan A
   condition is ambiguous, it is treated as false: doing nothing is safer than sending by mistake.
 - The UI only shows a generic result; it never echoes the condition, instruction, or verdict.
 
+## Configuration
+
+```yaml
+# the profile's cordis.patch.yml
+- id: if-command
+  name: 'dsh-if'
+  config:
+    mode: message     # default; background restores the 0.2.x behavior
+```
+
+- `mode: message` (default): `/if` first queues itself as an ordinary user message and is judged
+  when the turn actually opens. The entry is the literal `/if <condition>` plus the instruction and
+  shows up in the queue dock above the composer, so editing it edits condition and instruction.
+- `mode: background`: the 0.2.x behavior. The command returns "queued" at once and the judgement
+  runs in a background task, outside the session queue.
+
+The plugin exports no `Config` schema, so the host hands the raw `config` object to
+`apply(ctx, config)`; unknown keys are ignored and a missing `mode` means `message`.
+
 ## How it works
 
 1. `ctx.commands.register` registers `/if` with `recordInput: false`.
-2. **Queued behind the running turn.** A slash command is dispatched even while the model is
-   working, but at that moment a fork child can only inherit history up to the previous
-   `turn/end` — a context in which the running work has not happened yet. `/if` therefore reads
-   `session.snapshotEvents()`: while a turn is open it hands the judgement to a background task and
-   the command returns "queued" immediately (so the composer stays usable); the task waits for that
-   turn to close (up to 30 minutes) and only then judges and delivers against the finished context.
-3. **Preferred path: a forked judge.** It resolves `ctx.subagents.getProvider('fork')`
+2. **Queueing.** In `message` mode the command immediately queues the literal
+   `/if <condition>\n<instruction>` as an ordinary user message via `agent.followup()`. It lands in
+   the host's durable inbox, so the queue dock shows it and can edit / remove / steer it, and the
+   composer is never held by the command.
+3. **Interception at the turn boundary.** When the turn opens, the host claims that batch through
+   the `agent/pre-step` waterfall; the plugin takes the claimed messages, picks the ones starting
+   with `/if`, and judges them in place — the literal `/if` line never reaches the model history.
+   On `YES` the message's content is replaced by the instruction; on `NO` the message is dropped.
+   If the whole batch is dropped, the host opens no step and the turn closes immediately.
+4. **Preferred path: a forked judge.** It resolves `ctx.subagents.getProvider('fork')`
    (requiring `inheritsParentContext === true`) and starts the child with
    `startActivation({ provider: 'fork', childId, request: { parent, agentOptions, prompt }, delivery: 'caller' })`.
    The request adds only one trailing user message (judging rules + condition); tools, system
    prompt, and history are inherited verbatim, so the prefix matches the main session's next request.
-4. **Read-only at execution time.** The child inherits the full tool catalog, but a
+5. **Inherited work is dropped.** The fork seed is the parent's log up to the last `turn/end`, and
+   next-turn messages queued before that boundary fall inside it. A child would run those copies as
+   its own turns first, so the verdict lands on the wrong turn. The plugin therefore removes every
+   pending inbox item except its own judge prompt when the child is created; the parent's queue is
+   untouched.
+6. **Read-only at execution time.** The child inherits the full tool catalog, but a
    `ctx.tools.guard` guard — scoped to judge children only — allows `read` / `glob` / `grep` /
    `web_search` / `web_fetch` / `skill` and refuses every mutating or executing tool. The tool
    catalog is not filtered, so the cached prefix is unaffected.
-5. The judge times out after 60 seconds. Only on `YES`, `agent.followup(...)` appends the
-   instruction as an identified user message with `id` and `role: 'user'`. On `NO`, the main
-   agent is not touched.
-6. **Fallback path.** When the host has no prefix-inheriting fork provider, `historyTranscript()`
+7. The judge times out after 60 seconds. Only on `YES` the instruction is handed to the main agent
+   as an identified user message with `id` and `role: 'user'`. On `NO`, the queued message is
+   dropped and the main agent is not touched.
+8. **Fallback path.** When the host has no prefix-inheriting fork provider, `historyTranscript()`
    reads `agent.session.deriveMessages()`, keeps only user / assistant / tool messages, and
    builds a plain-text transcript of at most ~24k characters (each message clipped to 3k
    characters, keeping head and tail). One `ctx.llm.stream()` call then judges it. That request
    carries no main-session `sessionId`, so it cannot hit the main cache; it exists for
    compatibility only.
+9. **`background` mode** skips steps 2–3: the command reads `session.snapshotEvents()`, and while
+   a turn is open it hands the judgement to a background task and returns "queued" immediately;
+   the task waits for the turn to close (up to 30 minutes), then judges and delivers.
 
 ## KV cache and context isolation
 
@@ -200,6 +231,10 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
 - tool-call markup in the judge output is stripped; output like `MAYBE` fails closed
 - the guard only covers judge children: `write` / `pwsh` are refused, `read` / `grep` pass,
   other sessions are untouched, and ownership is released once judging ends
+- the forked child drops work inherited from the parent's queue and keeps only its judge prompt
+- `mode: message`: the command turns itself into an ordinary queued message; the turn boundary
+  replaces `/if` with the instruction, drops it on `NO`, and leaves ordinary messages alone
+- `mode: background`: acknowledges at once while busy and judges after the turn closes
 - falling back to the transcript judge when no prefix-inheriting provider exists, and never
   using a non-inheriting provider
 - a failing fork activation surfaces as a judge error and sends nothing
@@ -224,9 +259,11 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
   timeline (label `if judge`, with elapsed time, cost and token usage) until the judge is
   disposed. The main session gains no judge messages — that card belongs to the separate
   child session.
-- A queued `/if` does not appear in the composer's queued-message panel: that panel is the client's local
-  outbox, and slash commands are dispatched immediately, so a plugin cannot add an entry or offer edit / delete /
-  force-send there. The command node itself reports "queued".
+- A queued `/if` is a copy of an ordinary user message (`/if <condition>` + instruction). It is
+  replaced by the instruction (YES) or dropped (NO) before the turn opens, so it never reaches model
+  history; editing it edits both the condition and the instruction.
+- If judging fails (timeout, unrecognized verdict, no available route), the queued message is dropped
+  too and only a warning is logged. The UI shows nothing extra; check `command/done` and the DSH log.
 - The read-only allowlist is static: tools that are not listed — including read-only MCP
   tools — are refused. Open an issue if you need one added.
 - On the fallback path the judge sees a plain-text transcript; images and files appear only as

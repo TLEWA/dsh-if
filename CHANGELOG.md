@@ -3,6 +3,25 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-11-04
+
+### Added
+
+- `mode: message` (the new default): `/if` queues itself as an ordinary user message, so it shows
+  up in the composer's queue dock and can be edited, removed, or steered like any other message.
+  The literal `/if` line is judged at the turn boundary (`agent/pre-step`) and replaced by the
+  instruction on `YES`, dropped on `NO`; it never reaches the model history.
+- `mode: background`: the 0.2.x behavior, selectable through the plugin config
+  (`- id: if-command` / `config: { mode: background }`).
+
+### Fixed
+
+- A forked judge no longer runs work inherited from the parent queue. The fork seed covers the
+  parent log up to the last `turn/end`, so next-turn messages queued just before that boundary
+  were copied into the child, which executed them as its own turns — the verdict then landed on
+  the wrong turn and the real instruction was dropped. Inherited pending items are now removed
+  when the child is created.
+
 ## [0.2.4] - 2026-11-04
 
 ### Fixed
