@@ -142,8 +142,11 @@ Start executing plan A
 - `mode: background`: the 0.2.x behavior. The command returns "queued" at once and the judgement
   runs in a background task, outside the session queue.
 
-The plugin exports no `Config` schema, so the host hands the raw `config` object to
-`apply(ctx, config)`; unknown keys are ignored and a missing `mode` means `message`.
+You can also skip the file: **Plugins → dsh-if → Configure** shows a "Judge mode" dropdown that
+applies immediately (`mode` is a volatile field, so the settings page rewrites the running config).
+
+The plugin exports a `Config` schema (`@deepseek-ai/schemastery`) describing that field; unknown
+keys are ignored and a missing `mode` means `message`.
 
 ## How it works
 

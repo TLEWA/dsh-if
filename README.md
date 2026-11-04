@@ -135,8 +135,11 @@ dsh plugin --profile desktop add .
 - `mode: background`：0.2.x 行为。命令立即返回“已排队”，判断丢给后台任务，判断过程不占队列。
   适合不想让判断占用一轮队列位置的场景。
 
-插件不导出 `Config` schema，宿主会把 patch 里的 `config` 原样传给 `apply(ctx, config)`，
-未知字段被忽略，`mode` 缺省即为 `message`。
+也可以不改文件：**插件 → dsh-if → 配置** 里有「判断方式」下拉框，切换即时生效（`mode` 声明为
+volatile 字段，设置页直接改写运行中的配置）。
+
+插件导出 `Config`（`@deepseek-ai/schemastery`）描述这个字段；`mode` 缺省即为 `message`，
+未知字段被忽略。
 
 ## 工作方式
 

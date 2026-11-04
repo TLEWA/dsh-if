@@ -61,9 +61,14 @@ Verified:
   the main session received no judge messages (all of them live in the separate child).
 - On 2026-11-04, `mode: message` queueing was verified in the real desktop: `/if` appeared in
   the queue dock above the composer as an ordinary user message (with edit / remove / steer),
-  the command returned in 1 ms, and the composer stayed free. The same round exposed the
-  "fork child inherits the parent's queued work" bug; its fix (`dropInheritedInbox`) is covered
-  by unit tests and still awaits a real-GUI re-check after restarting the desktop app.
+  the command returned in 1 ms, and the composer stayed free; after the turn ended the judge ran,
+  and a `YES` verdict delivered the instruction as an ordinary user bubble that opened a new turn.
+  `dropInheritedInbox` (the child dropping inherited queue items) was re-checked on the real desktop
+  in the same pass.
+- On 2026-11-04 the settings card was verified in the real desktop: **Plugins → dsh-if → Configure**
+  renders a "judge mode" dropdown, persists the choice into the profile's `cordis.patch.yml`
+  (`- id: if-command` / `config.mode`), and because `mode` is a volatile field the switch rewrites
+  the running configuration without a restart.
 
 Not fully verified:
 

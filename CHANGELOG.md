@@ -13,6 +13,14 @@ All notable changes are documented here. This project follows
   instruction on `YES`, dropped on `NO`; it never reaches the model history.
 - `mode: background`: the 0.2.x behavior, selectable through the plugin config
   (`- id: if-command` / `config: { mode: background }`).
+- A settings card (**Plugins → dsh-if → Configure**) with a "judge mode" dropdown. `mode` is a
+  volatile field, so switching applies to the running host immediately, without a restart.
+
+### Changed
+
+- The mode is read on every use instead of once at load, so a settings change takes effect at once.
+- The command no longer prints implementation details when queueing: `message` mode returns a plain
+  success (the queued message is the feedback) and `background` mode returns "已排队。".
 
 ### Fixed
 
