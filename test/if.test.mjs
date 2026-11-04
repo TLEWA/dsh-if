@@ -600,3 +600,20 @@ test('an ordinary message is never judged at the turn boundary', async () => {
   assert.deepEqual(decision.messages, [normal]);
   assert.equal(h.forks.length, 0);
 });
+
+test('the mode is read live, so a settings switch applies without a reload', async () => {
+  let mode = 'message';
+  // A volatile config field reaches `apply()` as a live reference, not a value.
+  const h = harness({ fork: { text: 'YES' }, config: { mode: { get: () => mode } } });
+
+  const queued = await invoke(h, ' 条件\n执行指令');
+  assert.deepEqual(queued, { kind: 'success' });
+  assert.equal(h.followups.length, 1, 'message mode queues the line itself');
+  assert.equal(h.forks.length, 0);
+
+  mode = 'background';
+  const judged = await invoke(h, ' 条件\n执行指令');
+  assert.equal(judged.kind, 'success');
+  assert.equal(judged.text, '条件成立，指令已作为用户消息发送。');
+  assert.equal(h.forks.length, 1, 'background mode judges inline');
+});
