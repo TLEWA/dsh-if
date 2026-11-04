@@ -22,6 +22,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
       - name: Verify the tag matches package.json
         run: |
           node -e "const p = require('./package.json'); const tag = process.env.GITHUB_REF_NAME; if ('v' + p.version !== tag) { console.error('tag ' + tag + ' does not match package version v' + p.version); process.exit(1); }"
