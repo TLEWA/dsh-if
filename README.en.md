@@ -57,13 +57,13 @@ Requirements:
 Pin a version:
 
 ```text
-dsh-if@0.3.3
+dsh-if@0.3.4
 ```
 
 Equivalent CLI command:
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.3.3
+dsh plugin --profile desktop add dsh-if@0.3.4
 ```
 
 ### From GitHub
@@ -77,11 +77,11 @@ https://github.com/TLEWA/dsh-if
 Pin a tag or the release tarball:
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.3
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.4
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.3.3/dsh-if-0.3.3.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.3.4/dsh-if-0.3.4.tgz
 ```
 
 ### From source
@@ -229,7 +229,11 @@ This is a design constraint, not an option:
 
 ## Compatibility
 
-- Verified on DSH `0.2.1-rc.5`, Windows desktop;
+- Verified on DSH `0.2.1-rc.5` and `0.2.2-rc.1`, Windows desktop;
+- Since 0.2.2 the host fixes the step's model before pre-step: the judge uses that step's
+  `modelSelection` or `agent.model.current()`, and pins the same route into the forked judge.
+  On 0.2.1, which has neither API, it falls back to the request header and `agent.options` —
+  the previous behaviour;
 - Uses the public `@deepseek-ai/dsh-commands` registration API;
 - Prefers the `ctx.subagents` `fork` provider plus `ctx.tools.guard`, and falls back to
   `ctx.llm.stream` when the host does not provide them;

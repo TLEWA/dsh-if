@@ -3,6 +3,24 @@
 本项目的所有重要变更都记录在这里，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.4] - 2026-11-05
+
+### 适配
+
+- **DSH `0.2.2-rc.1`：判断与主线走同一个模型路由。** 0.2.2 在 pre-step 之前就固定了本步模型，
+  `agent.options` 只作为回退；而 fork 子会话继承的是上一个请求头，判断可能落到另一个模型上。
+  现在路由按「本步 `modelSelection` → `agent.model.current()` → `session.requestHeader()` →
+  `agent.options` → provider 列表」解析，fork 判断再把这条路由以 `agentOptions.provider/model`
+  钉进子会话。0.2.1 没有这些 API 时行为不变（继续继承请求头）。
+- 只读 guard、命令注册、`agent/pre-step` 的 decision 形状在 0.2.2 均未变；`engines.dsh` 保持
+  `>=0.2.1-rc.5`，两个版本都可安装。
+- 测试新增路由用例：pre-step 选择优先、live 选择优先、无路由提示时保留继承、transcript 回退、
+  以及不带 `agent` 的工具执行不会被误判为判断子会话。
+
+### 文档
+
+- 兼容性段落改为 `0.2.1-rc.5` 与 `0.2.2-rc.1`，说明判断跟随本步模型。
+
 ## [0.3.3] - 2026-11-04
 
 ### 文档

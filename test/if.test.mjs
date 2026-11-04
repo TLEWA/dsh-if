@@ -7,7 +7,9 @@ import { apply } from '../lib/index.js';
  *
  * `fork === undefined` means "the host has no fork subagent provider", which
  * exercises the transcript fallback. `fork: { text: 'YES' }` exercises the
- * preferred forked judge.
+ * preferred forked judge. `modelAccessor` fakes the 0.2.2+ `agent.model.current()`
+ * accessor; `headerConfig: null` fakes a host whose request header carries no
+ * route (0.2.1 without an active request).
  */
 function harness({
   answer = 'YES',
@@ -19,6 +21,8 @@ function harness({
   forkInherits = true,
   inherited = [],
   inheritedSteps = [],
+  modelAccessor,
+  headerConfig = { provider: 'deepseek-official', model: 'deepseek-flash' },
   config = { mode: 'background' },
 } = {}) {
   let definition;
@@ -170,12 +174,17 @@ function harness({
   const appends = [];
   const parentAgent = {
     options: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high' },
+    // 0.2.2+ exposes the session's live model selection here; 0.2.1 has no
+    // `model` at all, which is what leaving this undefined fakes.
+    ...(modelAccessor === undefined
+      ? {}
+      : { model: { current: () => modelAccessor } }),
     session: {
       deriveMessages() {
         return messages;
       },
       requestHeader() {
-        return { config: { provider: 'deepseek-official', model: 'deepseek-flash' } };
+        return headerConfig === null ? undefined : { config: headerConfig };
       },
       snapshotEvents() {
         return events;
@@ -211,13 +220,29 @@ function harness({
     childInbox: () => lastChildInbox,
     guardReleased: () => guardRelease === true,
     /** Run the loop's `agent/pre-step` waterfall over a claimed batch. */
-    preStep(batch, { agent = parentAgent, signal = new AbortController().signal, context } = {}) {
+    preStep(batch, {
+      agent = parentAgent,
+      signal = new AbortController().signal,
+      context,
+      modelSelection,
+    } = {}) {
       assert.equal(typeof preStepHandler, 'function', 'the plugin must register agent/pre-step');
-      return preStepHandler({ agent, messages: batch, step: 0, signal }, async () => ({
-        kind: 'enter',
-        // The host's default handler appends the turn's runtime context, if any.
-        messages: context === undefined ? batch : [...batch, context],
-      }));
+      return preStepHandler(
+        {
+          agent,
+          messages: batch,
+          step: 0,
+          signal,
+          // 0.2.2 adds the step's fixed selection to the payload; hosting it
+          // optionally keeps the same helper usable for a 0.2.1-style call.
+          ...(modelSelection === undefined ? {} : { modelSelection }),
+        },
+        async () => ({
+          kind: 'enter',
+          // The host's default handler appends the turn's runtime context, if any.
+          messages: context === undefined ? batch : [...batch, context],
+        }),
+      );
     },
     dispose() {
       for (const dispose of effects) {
@@ -344,6 +369,81 @@ test('the forked judge drops work inherited from the parent queue', async () => 
   );
 });
 
+// ---------------------------------------------------------------------------
+// Route resolution: since 0.2.2 the step's model is fixed before pre-step.
+// ---------------------------------------------------------------------------
+
+test('a forked judge pins the route the step actually runs on', async () => {
+  // `agent.options` is only a fallback in 0.2.2; the live selection is what the
+  // step runs on. A plain fork inherits the previous request header instead, so
+  // the judge must be pinned explicitly or it would answer on a stale model.
+  const h = harness({
+    fork: { text: 'YES' },
+    modelAccessor: { provider: 'deepseek-official', model: 'deepseek-pro' },
+  });
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
+  await waitFor(() => h.forks.length === 1 && h.followups.length === 1);
+
+  assert.deepEqual(h.forks[0].request.agentOptions, {
+    maxTokens: 1024,
+    provider: 'deepseek-official',
+    model: 'deepseek-pro',
+  });
+});
+
+test('the pre-step selection outranks the live selection', async () => {
+  const h = harness({
+    fork: { text: 'YES' },
+    modelAccessor: { provider: 'live', model: 'live-model' },
+    config: null,
+  });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n执行指令' }] };
+
+  const decision = await h.preStep([queued], {
+    modelSelection: { provider: 'step', model: 'step-model' },
+  });
+
+  assert.equal(decision.kind, 'enter');
+  assert.deepEqual(h.forks[0].request.agentOptions, {
+    maxTokens: 1024,
+    provider: 'step',
+    model: 'step-model',
+  });
+});
+
+test('a host without any live route keeps inheriting the parent route', async () => {
+  // 0.2.1 has neither `agent.model` nor `modelSelection`: nothing to pin, so the
+  // fork stays on its inherited request header.
+  const h = harness({ fork: { text: 'YES' }, config: null });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n执行指令' }] };
+
+  await h.preStep([queued]);
+
+  assert.deepEqual(h.forks[0].request.agentOptions, { maxTokens: 1024 });
+});
+
+test('the transcript judge follows the live selection, not the static options', async () => {
+  const h = harness({
+    modelAccessor: { provider: 'deepseek-official', model: 'deepseek-pro' },
+  });
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
+  await waitFor(() => h.followups.length === 1);
+
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].provider, 'deepseek-official');
+  assert.equal(h.calls[0].model, 'deepseek-pro');
+});
+
+test('without a header or selection the transcript judge falls back to the options', async () => {
+  const h = harness({ headerConfig: null });
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
+  await waitFor(() => h.followups.length === 1);
+
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].provider, 'deepseek-official');
+  assert.equal(h.calls[0].model, 'deepseek-flash');
+});
+
 test('forked judge NO verdict does not send the instruction', async () => {
   const h = harness({ fork: { text: 'NO' } });
   const result = await invoke(h, ' 用户已经吃过饭\n请再点一份');
@@ -421,6 +521,18 @@ test('the tool guard keeps the judge child read-only, like plan mode', async () 
   assert.equal(guard({ agent: { id: childId }, name: 'write' }), undefined);
   assert.equal(guard({ agent: undefined, name: 'write' }), undefined);
   assert.equal(guard({ agent: { id: childId } }), undefined);
+});
+
+test('a 0.2.2 tool execution without an owning agent is never denied', async () => {
+  const h = harness({ fork: { text: 'YES' } });
+  await invoke(h, ' 条件\n执行指令');
+  await waitFor(() => h.guardDuringJudge.length === 1);
+  const guard = h.guard();
+
+  // `ToolExecutionInput.agent` is optional: an execution that carries no agent
+  // cannot belong to the judge child, so it must pass through untouched.
+  assert.equal(guard({ name: 'write', arguments: {}, callId: 'c1' }), undefined);
+  assert.equal(guard(undefined), undefined);
 });
 
 test('a fork provider without prefix inheritance falls back to the transcript judge', async () => {

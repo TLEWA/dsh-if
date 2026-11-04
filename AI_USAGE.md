@@ -35,8 +35,8 @@
 
 已验证：
 
-- `node --test` / `npm test` 通过 26 项测试（本机沙箱会拦 `node --test` 的子进程，
-  因此以 `node test/if.test.mjs` 进程内运行核对）；
+- `node --test` / `npm test` 通过 49 项测试、1 项按条件跳过（本机沙箱会拦 `node --test`
+  的子进程，因此以 `node test/run.mjs` 进程内运行核对）；
 - 0.1.0 时在 DSH `0.2.1-rc.5`、Windows 桌面端中，通过 CDP 在真实 Web GUI 里执行过
   transcript 判断路径：
   - `NO`：`/if 1+1=3` + `请只回复 BAD` 返回“条件不成立，未执行。”，没有发送用户消息；
@@ -54,10 +54,24 @@
   选中后写入 profile 的 `cordis.patch.yml`（`- id: if-command` / `config.mode`）；
   下拉切换即时改写运行中的配置（volatile 字段），无需重启。
 - 0.2.3 / 0.2.4 的 `background` 排队与中文裁决（`是` / `不成立`）在真实 GUI 里各验证过一次。
+- 2026-11-05 在 DSH `0.2.2-rc.1`（Windows，临时 profile + CDP）复验：
+  - `/if` 出现在命令表；`YES`（`/if 1+1=2` + 指令）投递指令并得到回复，`NO`（`/if 1+1=3`）
+    只留 `command/run` + `command/done` 卡片，`turn/end` 为 blocked，无用户消息；
+  - fork 判官的子会话日志显示 `agentProvider/agentModel/agentReasoningEffort` 与
+    `maxTokens: 1024` 一并出现在 `request/header`，说明本步模型被显式钉住；
+  - `mode: background` 的排队卡片（“已排队。”）与后续指令投递在 0.2.2 上正常；
+  - 插件详情页照常渲染「判断方式」设置卡片，切换后写入配置并立即生效；
+  - 判官在 0.2.2 仍以 `approval/policy never` 运行，尝试让它调用 `write` / `pwsh` 时
+    判官直接拒绝并判 `NO`，未出现审批弹窗。
+- 2026-11-05 同一份 0.3.4 在 DSH `0.2.1-rc.5`（Windows，临时 profile + CDP）回退验证：
+  `/if` 出现在命令表，`YES`（`/if 1+1=2`）投递指令并得到回复，`NO`（`/if 1+1=3`）
+  只留命令卡片且 `turn/end` 为 blocked；判官子会话日志里 `provider/model` 仍取父会话
+  请求头（`deepseek-flash`）、`maxTokens: 1024`，说明没有 `agent.model` 时按原路继承。
 
 未完全验证：
 
 - 只读 guard 在真实 GUI 里对写操作/命令的实际拦截，目前只有单元测试覆盖；
+  0.2.2 真机中判官会先拒绝执行副作用工具，无法强迫它触发 guard 拒绝路径；
 - 所有 DSH 版本、操作系统、主题和缩放比例；
 - 超长会话触发 24k 字符裁剪时的边界行为（仅回退路径涉及）；
 - 与其他命令插件或会话修改插件同时使用时的组合行为；

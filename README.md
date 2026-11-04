@@ -53,13 +53,13 @@
 固定版本：
 
 ```text
-dsh-if@0.3.3
+dsh-if@0.3.4
 ```
 
 命令行等价写法：
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.3.3
+dsh plugin --profile desktop add dsh-if@0.3.4
 ```
 
 ### 从 GitHub 安装
@@ -73,11 +73,11 @@ https://github.com/TLEWA/dsh-if
 固定到标签或 Release 附件：
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.3
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.4
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.3.3/dsh-if-0.3.3.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.3.4/dsh-if-0.3.4.tgz
 ```
 
 ### 从源码安装
@@ -203,7 +203,10 @@ volatile 字段，设置页直接改写运行中的配置）。
 
 ## 兼容性
 
-- 已在 DSH `0.2.1-rc.5`、Windows 桌面端验证；
+- 已在 DSH `0.2.1-rc.5` 与 `0.2.2-rc.1`、Windows 桌面端验证；
+- 0.2.2 起宿主在 pre-step 之前固定本步模型：判断优先使用该步的 `modelSelection` 或
+  `agent.model.current()`，再把同一路由钉进 fork 子会话（0.2.1 没有这些 API 时退回请求头与
+  `agent.options`，行为不变）；
 - 命令使用 `@deepseek-ai/dsh-commands` 的公开注册接口；
 - 判断优先使用 `ctx.subagents` 的 `fork` provider + `ctx.tools.guard`；host 不提供时自动回退到 `ctx.llm.stream`；
 - 不依赖客户端 bundle，不需要构建步骤。
