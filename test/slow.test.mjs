@@ -17,7 +17,9 @@ test('a provider that ignores abort cannot park the judge forever', async () => 
 
   const ctx = {
     logger: { warn: (message) => warnings.push(String(message)) },
-    effect() {},
+    effect(fn) {
+      return fn();
+    },
     commands: { register: (value) => (definition = value) },
     tools: { guard: () => () => undefined },
     llm: {

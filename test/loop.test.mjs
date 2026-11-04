@@ -27,7 +27,9 @@ function createLoop({ judge = 'YES', mode = 'message', judgeThrows, streamThrows
 
   const ctx = {
     logger: { warn() {} },
-    effect() {},
+    effect(fn) {
+      return fn();
+    },
     commands: {
       register(value) {
         definition = value;

@@ -45,7 +45,8 @@ function harness({
       },
     },
     effect(fn) {
-      effects.push(fn);
+      const dispose = fn();
+      if (typeof dispose === 'function') effects.push(dispose);
     },
     commands: {
       register(value) {
@@ -219,8 +220,8 @@ function harness({
       }));
     },
     dispose() {
-      for (const fn of effects) {
-        const cleanup = fn();
+      for (const dispose of effects) {
+        const cleanup = dispose();
         if (typeof cleanup === 'function') cleanup();
       }
     },

@@ -3,6 +3,15 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-11-04
+
+### Fixed
+
+- **Re-enabling the plugin failed with `command "if" is already registered`.** The command was
+  registered directly on the context instead of through `ctx.effect`, so unloading the plugin left
+  the registration behind in the host's command service and the next activation collided with it.
+  The registration now lives in the plugin fiber and is released on unload.
+
 ## [0.3.1] - 2026-11-04
 
 ### Added
