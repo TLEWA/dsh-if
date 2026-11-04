@@ -1,171 +1,153 @@
-# Changelog
+# 更新日志
 
-All notable changes are documented here. This project follows
-[Semantic Versioning](https://semver.org/).
+本项目的所有重要变更都记录在这里，版本号遵循
+[语义化版本](https://semver.org/lang/zh-CN/)。
+
+## [0.3.3] - 2026-11-04
+
+### 文档
+
+- 更新日志改为中文（此前只有英文），与 README 保持一致。
+- 安装示例里的固定版本号同步到 0.3.2；「工作方式」第 1 步补充命令注册挂在插件 fiber 上的说明。
 
 ## [0.3.2] - 2026-11-04
 
-### Fixed
+### 修复
 
-- **Re-enabling the plugin failed with `command "if" is already registered`.** The command was
-  registered directly on the context instead of through `ctx.effect`, so unloading the plugin left
-  the registration behind in the host's command service and the next activation collided with it.
-  The registration now lives in the plugin fiber and is released on unload.
+- **重新启用插件时报 `command "if" is already registered`。** 命令是直接注册在 ctx 上的，没有走
+  `ctx.effect`，所以插件卸载后注册仍留在宿主的命令服务里，下一次激活就撞名了。现在注册挂在插件
+  自己的 fiber 上，卸载时一并释放。
 
 ## [0.3.1] - 2026-11-04
 
-### Added
+### 新增
 
-- A failed judgement is no longer silent, and no longer reaches the main model. The `/if` entry is
-  dropped (and the batch rejected when nothing else remains) so the turn ends without a request, and
-  the failure is logged as an `【/if 未执行】` error command card (`command/run` + `command/done`,
-  log-only, written after `turn/end` so it is not folded into the collapsed turn-process group) that
-  carries the failure reason and the original input; a "取回 /if" button on the right of that card
-  (registered on `conversation.chat.commandview` under the `if` key) puts that input back into the
-  composer in one click. `background` mode logs the same card.
-- `test/loop.test.mjs`: a fake turn loop that mirrors the host's claim order and empty-batch
-  behavior, so the user-visible flow is covered without an API call.
-- `test/client.test.mjs`: an in-process client harness (mini React, fake slots, fake `configForms`).
-- `npm run test:slow` for the "provider ignores AbortSignal" deadline case.
+- 判断失败不再静默，也不会打扰主线模型：`/if` 条目被丢弃（批次里没有别的消息时直接拒绝这批），
+  这一轮不产生任何模型请求；失败同时记为一张 `【/if 未执行】` 错误命令卡片
+  （`command/run` + `command/done`，log-only，写在 `turn/end` 之后，所以不会被折进收起的
+  turn-process 组），卡片里带失败原因和原始输入；卡片右侧的「取回 /if」按钮
+  （注册在 `conversation.chat.commandview` 的 `if` key 上）可以一键把原文放回输入框。
+  `background` 模式同样记这张卡片。
+- `test/loop.test.mjs`：一个假回合循环，复刻宿主的领取顺序与空批次语义，无需真实请求即可覆盖
+  用户可见的流程。
+- `test/client.test.mjs`：进程内客户端测试环境（迷你 React、假 slots、假 `configForms`）。
+- `npm run test:slow`：单独跑「provider 忽略 AbortSignal」的截止用例。
 
-### Fixed
+### 修复
 
-- **Silent message loss.** When the judge threw or returned an unparseable verdict, the `/if` entry
-  was dropped and the turn ended without any reply; the queued message simply vanished. It is now
-  reported as a visible, recoverable command card instead of a message the model would answer.
-- **The judge could hang forever.** The 60s timeout only aborted a signal, so a provider that
-  ignored it kept the turn parked. Starting the fork, awaiting its result, and reading the
-  transcript stream are now all bounded by a real deadline, and a forked judge that fails to start
-  falls back to the transcript judge instead of failing the command.
-- **Inherited `next-step` work.** A forked judge also inherited queued steering from the parent,
-  which the host claims before next-turn messages, so the judge ran the parent's pending steer.
-  Both inbox queues are now cleaned when the child appears.
-- **A refused settings write looked saved.** `ConfigForms.mutate()` resolves `false` when the host
-  refuses a write; the card treated any resolution as success and showed "已保存". Refusals now show
-  "未保存" and the dropdown reflects the real value.
-- **Background judges could reorder.** Several `/if` commands woken at the same turn end judged
-  concurrently; they now run on one serial chain in send order.
-- Client cleanup: the settings mirror subscription is disposed on unload, and the load retry chain
-  actually retries instead of stopping after the first `rebind()`.
-- The settings card says "加载中…" while the profile loads instead of claiming it is read-only.
-- Background mode queues and returns at once instead of judging synchronously in the command
-  handler (which could block for up to 60 seconds).
+- **消息静默丢失。** 判断器抛错或输出无法解析时，那条 `/if` 会被丢弃、这一轮也不会有任何回复，
+  排队的消息就这样消失了。现在改为一张可见、可取回的命令卡片，而不是一条会被模型回答的消息。
+- **判断可能永久挂起。** 60 秒超时只 abort 了一个 signal，provider 若不理会就会一直卡住这一轮。
+  现在启动 fork、等待结果、读取 transcript 流都有真实截止；fork 启动失败也会回退到 transcript
+  判断，而不是让命令失败。
+- **继承了 `next-step` 待办。** fork 出来的判断子会话会继承父会话排队的插话，而宿主先领 next-step，
+  于是判断子会话去执行父会话的待办。现在子会话出现时会清掉两条队列。
+- **被拒绝的写入看起来像已保存。** 宿主拒绝写入时 `ConfigForms.mutate()` 返回 `false`，设置卡片却把
+  任何「已完成」都当成成功并显示「已保存」。现在拒绝会显示「未保存」，下拉框也回弹到真实值。
+- **background 判断可能乱序。** 同一轮结束时被唤醒的多个 `/if` 会并发判断；现在按发送顺序走同一条
+  串行链。
+- 客户端清理：卸载时释放设置镜像的订阅，加载重试链真正会重试，而不是第一次 `rebind()` 后就停住。
+- 设置卡片在 profile 加载期间显示「加载中…」，不再误说成只读。
+- `background` 模式改为排队后立即返回，不再在命令处理器里同步判断（那样最长会阻塞 60 秒）。
 
 ## [0.3.0] - 2026-11-04
 
-### Added
+### 新增
 
-- `mode: message` (the new default): `/if` queues itself as an ordinary user message, so it shows
-  up in the composer's queue dock and can be edited, removed, or steered like any other message.
-  The literal `/if` line is judged at the turn boundary (`agent/pre-step`) and replaced by the
-  instruction on `YES`, dropped on `NO`; it never reaches the model history.
-- `mode: background`: the 0.2.x behavior, selectable through the plugin config
-  (`- id: if-command` / `config: { mode: background }`).
-- A settings card (**Plugins → dsh-if → Configure**) with a "judge mode" dropdown. `mode` is a
-  volatile field, so switching applies to the running host immediately, without a restart.
+- `mode: message`（新的默认值）：`/if` 把自己当作一条普通用户消息入队，因此会出现在输入框的排队
+  面板里，可以像普通消息一样编辑、删除或插话。真正的那行 `/if` 在回合边界（`agent/pre-step`）被判断，
+  `YES` 时替换为指令、`NO` 时丢弃；它永远不会进入模型历史。
+- `mode: background`：0.2.x 的行为，可在插件配置里切换
+  （`- id: if-command` / `config: { mode: background }`）。
+- 设置卡片（**插件 → dsh-if → 配置**），含「判断模式」下拉框。`mode` 是 volatile 字段，
+  切换立即作用于运行中的宿主，无需重启。
 
-### Changed
+### 变更
 
-- The mode is read on every use instead of once at load, so a settings change takes effect at once.
-- The command no longer prints implementation details when queueing: `message` mode returns a plain
-  success (the queued message is the feedback) and `background` mode returns "已排队。".
+- 模式在每次使用时现读，而不是加载时读一次，所以改设置立即生效。
+- 入队时命令不再输出实现细节：`message` 模式返回纯成功（排队消息本身就是反馈），
+  `background` 模式返回「已排队。」。
 
-### Fixed
+### 修复
 
-- A forked judge no longer runs work inherited from the parent queue. The fork seed covers the
-  parent log up to the last `turn/end`, so next-turn messages queued just before that boundary
-  were copied into the child, which executed them as its own turns — the verdict then landed on
-  the wrong turn and the real instruction was dropped. Inherited pending items are now removed
-  when the child is created.
+- fork 出来的判断子会话不再执行从父会话队列继承来的工作。fork 的种子覆盖父会话日志直到最后一个
+  `turn/end`，因此在这个边界之前入队的 next-turn 消息也被复制进子会话，子会话把它们当成自己的回合
+  跑掉——判断结果就落到了错误的回合上，真正的指令被丢掉。现在创建子会话时会移除继承来的待办。
 
 ## [0.2.4] - 2026-11-04
 
-### Fixed
+### 修复
 
-- The forked judge inherits the parent session's language, so a Chinese session answers
-  "是" / "不成立" even though the prompt asks for YES / NO; that surfaced as
-  "条件判断失败：模型未返回 YES/NO". Both spellings are now accepted, with negative forms
-  matched first so "不成立" is never read as "成立".
+- fork 出来的判断子会话继承父会话的语言，所以中文会话即使 prompt 要求 YES / NO 也会回答
+  「是」/「不成立」，表现为「条件判断失败：模型未返回 YES/NO」。现在两种写法都接受，并且优先匹配
+  否定形式，避免把「不成立」读成「成立」。
 
 ## [0.2.3] - 2026-11-04
 
-### Fixed
+### 修复
 
-- The queued judge no longer runs inside the command handler. A command that is still
-  executing keeps the composer blocked, so parking for a whole turn made the input box
-  unusable. The handler now acknowledges immediately ("queued") and the judgement waits
-  in the background; the running turn's token count is unchanged.
+- 排队的判断不再在命令处理器里执行。命令执行期间输入框一直被占住，为一个回合原地等待会让输入框
+  不可用。现在处理器立即返回「已排队」，判断在后台等待；运行中回合的 token 计数不变。
 
-### Known limitation
+### 已知限制
 
-- A queued `/if` cannot appear in the composer's queued-message panel: slash commands are
-  dispatched immediately by the client, and plugins cannot enqueue into that outbox.
+- 排队的 `/if` 无法出现在输入框的排队面板里：斜杠命令由客户端立即派发，插件无法把它塞进那个队列。
 
 ## [0.2.2] - 2026-11-04
 
-### Fixed
+### 修复
 
-- The queueing wait used an unref'd timer, so a process with no other pending work
-  (notably `node --test` on Node 20) could exit while the command was still waiting.
-  The timer is now ref'd; behaviour on a live host is unchanged.
+- 排队等待用了 unref 的定时器，因此没有其它待办工作的进程（尤其是 Node 20 上的 `node --test`）
+  可能在命令仍在等待时就退出。现在定时器是 ref 的；对运行中的宿主行为不变。
 
 ## [0.2.1] - 2026-11-04
 
-Queue the judgment behind a turn that is already running.
+把判断排到一个正在运行的回合之后。
 
-### Fixed
+### 修复
 
-- `/if` entered while the model was working judged a stale context: the command is dispatched
-  immediately, but a fork child inherits history only up to the previous `turn/end`, so the
-  running turn's work was invisible and the condition was answered `NO`. The command now reads
-  `session.snapshotEvents()` and waits for the open turn to close (up to 30 minutes) before
-  judging, then delivers against the finished context — the same queueing a normal message gets.
+- 模型正在工作时输入 `/if` 会基于过期的上下文判断：命令是被立即派发的，但 fork 子会话只继承到上一个
+  `turn/end` 为止的历史，运行中回合的工作对它不可见，条件就被判成 `NO`。现在命令读取
+  `session.snapshotEvents()`，等待打开的回合结束（最长 30 分钟）后再判断，基于已完成的上下文交付——
+  与普通消息得到的排队行为一致。
 
 ## [0.2.0] - 2026-11-04
 
-Judge with the parent session's own request prefix, and keep it read-only.
+用父会话自己的请求前缀做判断，并保持只读。
 
-### Added
+### 新增
 
-- The condition is now judged by a **forked subagent** (`ctx.subagents`, provider `fork`):
-  tools, system prompt, and message history are inherited verbatim and the judge adds only one
-  trailing user message. The prefix is byte-identical to the main session's next request, so the
-  provider's prompt cache / KV cache is reused instead of re-paying for the whole context.
-- An execution-time tool guard (`ctx.tools.guard`) keeps the judge read-only: `read`, `glob`,
-  `grep`, `web_search`, `web_fetch`, `skill` and other inspection tools are allowed; writes,
-  edits, commands, jobs, and subagents are refused. The tool catalog is never filtered — the
-  same trade-off DSH plan mode makes for request-cache stability.
-- Automatic fallback to the previous one-shot transcript judge when the host exposes no
-  prefix-inheriting `fork` provider.
+- 条件改由 **fork 子代理**（`ctx.subagents`，provider `fork`）判断：工具、system prompt、消息历史都
+  原样继承，判断器只在末尾追加一条 user 消息。前缀与主会话的下一次请求逐字节一致，因此可以复用
+  provider 的 prompt cache / KV cache，而不是为整段上下文重新付费。
+- 执行期工具 guard（`ctx.tools.guard`）让判断器保持只读：`read`、`glob`、`grep`、`web_search`、
+  `web_fetch`、`skill` 等查看类工具放行；写入、修改、命令、任务与子代理一律拒绝。工具目录从不裁剪——
+  与 DSH 计划模式为请求缓存稳定所做的取舍相同。
+- 宿主没有可继承前缀的 `fork` provider 时，自动回退到之前的一次性 transcript 判断。
 
-### Changed
+### 变更
 
-- Judge timeout raised from 30s to 60s; the forked judge gets a 1024-token output budget per turn
-  so a read call plus the verdict fit.
-- `inject` now declares `subagents` and `tools` in addition to `commands` and `llm`.
+- 判断超时从 30 秒提高到 60 秒；fork 判断器每个回合有 1024 token 的输出预算，足够一次读取加上结论。
+- `inject` 除 `commands`、`llm` 外，现在也声明 `subagents` 与 `tools`。
 
 ## [0.1.0] - 2026-11-04
 
-First public release.
+首个公开版本。
 
-### Added
+### 新增
 
-- `/if` slash command: the first line is a condition, the remaining lines are an
-  instruction; a lone `---` line separates a multi-line condition.
-- A separate LLM judge reads prior user / assistant / tool messages and returns
-  `YES` or `NO`; only `YES` sends the instruction as a user message.
-- Context isolation: the command, condition, instruction, judge prompt, and verdict
-  never enter the main agent's context.
-- KV-cache safety: `NO` changes nothing; `YES` only appends one user message at the
-  tail via `agent.followup`, leaving the existing prefix byte-identical.
-- `recordInput: false`, so even log-only command events omit condition and instruction.
-- Fail-closed handling for empty input, unrecognized verdicts, provider errors, and a
-  30-second timeout.
-- Identification-safe followup messages (`id` + `role: 'user'`) so persisted sessions
-  reload without `lacks an identified message`.
-- Chinese and English documentation, unit tests, CI, and tag-based GitHub releases.
+- `/if` 斜杠命令：首行是条件，其余行是指令；多行条件用单独一行 `---` 分隔。
+- 一个独立的 LLM 判断器读取此前的 user / assistant / tool 消息并返回 `YES` 或 `NO`；只有 `YES`
+  才会把指令作为用户消息发出。
+- 上下文隔离：命令、条件、指令、判断 prompt 与判断结果都不会进入主 agent 的上下文。
+- KV 缓存安全：`NO` 不改变任何东西；`YES` 只通过 `agent.followup` 在末尾追加一条用户消息，
+  已有前缀保持字节一致。
+- `recordInput: false`，因此即使只是 log-only 的命令事件也不会带上条件与指令。
+- 空输入、无法识别的结论、provider 错误与 30 秒超时都按失败关闭处理。
+- 消息带 `id` 与 `role: 'user'`，持久化会话重载时不会报 `lacks an identified message`。
+- 中英文文档、单元测试、CI，以及基于 tag 的 GitHub 发布。
 
-### Compatibility
+### 兼容性
 
-- DSH `0.2.1-rc.5` or newer.
-- Node.js `20.3` or newer.
+- DSH `0.2.1-rc.5` 或更新版本。
+- Node.js `20.3` 或更新版本。

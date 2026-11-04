@@ -57,13 +57,13 @@ Requirements:
 Pin a version:
 
 ```text
-dsh-if@0.3.0
+dsh-if@0.3.3
 ```
 
 Equivalent CLI command:
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.3.0
+dsh plugin --profile desktop add dsh-if@0.3.3
 ```
 
 ### From GitHub
@@ -77,11 +77,11 @@ https://github.com/TLEWA/dsh-if
 Pin a tag or the release tarball:
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.0
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.3
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.3.0/dsh-if-0.3.0.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.3.3/dsh-if-0.3.3.tgz
 ```
 
 ### From source
@@ -155,7 +155,9 @@ keys are ignored and a missing `mode` means `message`.
 
 ## How it works
 
-1. `ctx.commands.register` registers `/if` with `recordInput: false`.
+1. `ctx.effect(() => ctx.commands.register(...))` registers `/if` with `recordInput: false`; the
+   registration lives on the plugin fiber, so unloading the plugin also unregisters the command and
+   re-enabling it never collides.
 2. **Queueing.** In `message` mode the command immediately queues the literal
    `/if <condition>\n<instruction>` as an ordinary user message via `agent.followup()`. It lands in
    the host's durable inbox, so the queue dock shows it and can edit / remove / steer it, and the

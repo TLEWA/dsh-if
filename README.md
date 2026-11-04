@@ -53,13 +53,13 @@
 固定版本：
 
 ```text
-dsh-if@0.3.0
+dsh-if@0.3.3
 ```
 
 命令行等价写法：
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.3.0
+dsh plugin --profile desktop add dsh-if@0.3.3
 ```
 
 ### 从 GitHub 安装
@@ -73,11 +73,11 @@ https://github.com/TLEWA/dsh-if
 固定到标签或 Release 附件：
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.0
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.3
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.3.0/dsh-if-0.3.0.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.3.3/dsh-if-0.3.3.tgz
 ```
 
 ### 从源码安装
@@ -147,7 +147,8 @@ volatile 字段，设置页直接改写运行中的配置）。
 
 ## 工作方式
 
-1. `ctx.commands.register` 注册 `/if`，并设置 `recordInput: false`。
+1. 通过 `ctx.effect(() => ctx.commands.register(...))` 注册 `/if`，并设置 `recordInput: false`；
+   注册挂在插件的 fiber 上，停用时一并注销，重新启用不会撞名。
 2. **入队。** `message` 模式下，命令立即把原文 `/if <条件>\n<指令>` 作为一条普通 user 消息
    `agent.followup()` 到会话队列：它进的是宿主 durable inbox，所以客户端排队面板照常显示、
    照常可编辑 / 删除 / 插话，输入框也不再被命令占住。
