@@ -1,6 +1,6 @@
 {
   "name": "dsh-if",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DSH /if command: let an LLM judge a condition from prior context, then send the instruction below it as a user message. Queues like an ordinary message.",
   "type": "module",
   "main": "lib/index.js",
@@ -68,8 +68,9 @@
     "node": ">=20.3"
   },
   "scripts": {
-    "check": "node --check lib/index.js && node --check lib/client.js && node --check test/if.test.mjs",
-    "test": "node --test test/if.test.mjs",
+    "check": "node --check lib/index.js && node --check lib/client.js && node --check test/if.test.mjs && node --check test/loop.test.mjs && node --check test/client.test.mjs",
+    "test": "node test/run.mjs",
+    "test:slow": "node test/slow.test.mjs",
     "prepack": "npm run check && npm test",
     "prepublishOnly": "npm run check && npm test"
   },

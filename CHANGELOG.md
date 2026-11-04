@@ -3,6 +3,45 @@
 All notable changes are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-11-04
+
+### Added
+
+- A failed judgement is no longer silent, and no longer reaches the main model. The `/if` entry is
+  dropped (and the batch rejected when nothing else remains) so the turn ends without a request, and
+  the failure is logged as an `【/if 未执行】` error command card (`command/run` + `command/done`,
+  log-only, written after `turn/end` so it is not folded into the collapsed turn-process group) that
+  carries the failure reason and the original input; a "取回 /if" button on the right of that card
+  (registered on `conversation.chat.commandview` under the `if` key) puts that input back into the
+  composer in one click. `background` mode logs the same card.
+- `test/loop.test.mjs`: a fake turn loop that mirrors the host's claim order and empty-batch
+  behavior, so the user-visible flow is covered without an API call.
+- `test/client.test.mjs`: an in-process client harness (mini React, fake slots, fake `configForms`).
+- `npm run test:slow` for the "provider ignores AbortSignal" deadline case.
+
+### Fixed
+
+- **Silent message loss.** When the judge threw or returned an unparseable verdict, the `/if` entry
+  was dropped and the turn ended without any reply; the queued message simply vanished. It is now
+  reported as a visible, recoverable command card instead of a message the model would answer.
+- **The judge could hang forever.** The 60s timeout only aborted a signal, so a provider that
+  ignored it kept the turn parked. Starting the fork, awaiting its result, and reading the
+  transcript stream are now all bounded by a real deadline, and a forked judge that fails to start
+  falls back to the transcript judge instead of failing the command.
+- **Inherited `next-step` work.** A forked judge also inherited queued steering from the parent,
+  which the host claims before next-turn messages, so the judge ran the parent's pending steer.
+  Both inbox queues are now cleaned when the child appears.
+- **A refused settings write looked saved.** `ConfigForms.mutate()` resolves `false` when the host
+  refuses a write; the card treated any resolution as success and showed "已保存". Refusals now show
+  "未保存" and the dropdown reflects the real value.
+- **Background judges could reorder.** Several `/if` commands woken at the same turn end judged
+  concurrently; they now run on one serial chain in send order.
+- Client cleanup: the settings mirror subscription is disposed on unload, and the load retry chain
+  actually retries instead of stopping after the first `rebind()`.
+- The settings card says "加载中…" while the profile loads instead of claiming it is read-only.
+- Background mode queues and returns at once instead of judging synchronously in the command
+  handler (which could block for up to 60 seconds).
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

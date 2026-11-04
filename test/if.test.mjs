@@ -18,6 +18,7 @@ function harness({
   forkThrows,
   forkInherits = true,
   inherited = [],
+  inheritedSteps = [],
   config = { mode: 'background' },
 } = {}) {
   let definition;
@@ -34,8 +35,15 @@ function harness({
   let guardRelease;
   let createdHandler;
   let lastChildInbox;
+  let streamDone = 0;
+  const warnings = [];
 
   const ctx = {
+    logger: {
+      warn(message) {
+        warnings.push(String(message));
+      },
+    },
     effect(fn) {
       effects.push(fn);
     },
@@ -55,8 +63,12 @@ function harness({
         calls.push(options);
         if (stream !== undefined) return stream(options, calls.length);
         return (async function* fake() {
-          yield { type: 'text-delta', text: answer };
-          yield { type: 'finish', reason: 'stop' };
+          try {
+            yield { type: 'text-delta', text: answer };
+            yield { type: 'finish', reason: 'stop' };
+          } finally {
+            streamDone += 1;
+          }
         })();
       },
     },
@@ -94,10 +106,18 @@ function harness({
             role: 'user',
             content: [{ type: 'text', text: item.text }],
           })),
+          // The seed also carries pending next-step messages (steering that was
+          // admitted but not yet delivered), which the child would claim first.
+          nextStep: inheritedSteps.map((item) => ({
+            id: item.id,
+            role: 'user',
+            content: [{ type: 'text', text: item.text }],
+          })),
           removed: [],
           remove(id) {
             this.removed.push(id);
             this.nextTurn = this.nextTurn.filter((message) => message.id !== id);
+            this.nextStep = this.nextStep.filter((message) => message.id !== id);
           },
         };
         lastChildInbox = childInbox;
@@ -146,6 +166,7 @@ function harness({
   apply(ctx, config);
 
   const followups = [];
+  const appends = [];
   const parentAgent = {
     options: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high' },
     session: {
@@ -157,6 +178,12 @@ function harness({
       },
       snapshotEvents() {
         return events;
+      },
+      append(type, data) {
+        const event = { type, data, seq: events.length };
+        events.push(event);
+        appends.push(event);
+        return event;
       },
     },
     followup(input) {
@@ -170,9 +197,12 @@ function harness({
     forks,
     disposes,
     followups,
+    appends: () => appends,
     agent: parentAgent,
     events: () => events,
     pushEvent: (event) => events.push(event),
+    warnings: () => warnings,
+    streamDone: () => streamDone,
     guard: () => guard,
     guardDuringJudge,
     childGuardArmed: () => childGuards.length,
@@ -180,11 +210,12 @@ function harness({
     childInbox: () => lastChildInbox,
     guardReleased: () => guardRelease === true,
     /** Run the loop's `agent/pre-step` waterfall over a claimed batch. */
-    preStep(batch, { agent = parentAgent, signal = new AbortController().signal } = {}) {
+    preStep(batch, { agent = parentAgent, signal = new AbortController().signal, context } = {}) {
       assert.equal(typeof preStepHandler, 'function', 'the plugin must register agent/pre-step');
       return preStepHandler({ agent, messages: batch, step: 0, signal }, async () => ({
         kind: 'enter',
-        messages: batch,
+        // The host's default handler appends the turn's runtime context, if any.
+        messages: context === undefined ? batch : [...batch, context],
       }));
     },
     dispose() {
@@ -205,6 +236,24 @@ async function waitFor(fn, timeout = 3000) {
     if (Date.now() > deadline) throw new Error('timed out waiting for the queued judge');
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+/** The failed-judge command cards the Host logged, oldest first. */
+function failureNotices(appends) {
+  const notices = [];
+  let run;
+  for (const event of appends) {
+    if (event.type === 'command/run' && event.data?.name === 'if') run = event.data;
+    if (
+      event.type === 'command/done'
+      && run !== undefined
+      && event.data?.commandId === run.commandId
+    ) {
+      notices.push({ run, done: event.data });
+      run = undefined;
+    }
+  }
+  return notices;
 }
 
 /** Mirrors the plugin's rule: a start that no later end has closed is open. */
@@ -247,7 +296,9 @@ test('forked judge inherits the session and appends only the condition prompt', 
   const h = harness({ fork: { text: 'YES' }, messages });
   const result = await invoke(h, ' 文件是否已经改好\n请运行测试');
 
-  assert.deepEqual(result, { kind: 'success', text: '条件成立，指令已作为用户消息发送。' });
+  // Background mode acknowledges at once and judges on the queue.
+  assert.deepEqual(result, { kind: 'success', text: '已排队。' });
+  await waitFor(() => h.followups.length === 1 && h.disposes.length === 1);
   assert.equal(h.calls.length, 0, 'the forked judge must not open a second llm stream');
   assert.equal(h.forks.length, 1);
 
@@ -275,11 +326,16 @@ test('the forked judge drops work inherited from the parent queue', async () => 
       { id: 'reminder-1', text: '[meow-memory-reflect] 记忆反思任务' },
       { id: 'judge-1', text: '【/if 条件判断】\n不是继承来的工作' },
     ],
+    // Steering admitted into next-step is seeded too, and the child claims
+    // next-step before next-turn: it would run the parent's work as its own.
+    inheritedSteps: [{ id: 'steer-1', text: '父级插话：继续部署' }],
   });
   const result = await invoke(h, ' 已经写完\n回复一句：好');
 
-  assert.deepEqual(result, { kind: 'success', text: '条件成立，指令已作为用户消息发送。' });
-  assert.deepEqual(h.childInbox().removed, ['reminder-1'], 'only the inherited work is dropped');
+  assert.deepEqual(result, { kind: 'success', text: '已排队。' });
+  await waitFor(() => h.followups.length === 1);
+  assert.deepEqual(h.childInbox().removed, ['reminder-1', 'steer-1'], 'only the inherited work is dropped');
+  assert.deepEqual(h.childInbox().nextStep, [], 'inherited next-step work is dropped as well');
   assert.deepEqual(
     h.childInbox().nextTurn.map((message) => message.id),
     ['judge-1'],
@@ -291,10 +347,10 @@ test('forked judge NO verdict does not send the instruction', async () => {
   const h = harness({ fork: { text: 'NO' } });
   const result = await invoke(h, ' 用户已经吃过饭\n请再点一份');
 
-  assert.deepEqual(result, { kind: 'success', text: '条件不成立，未执行。' });
-  assert.equal(h.followups.length, 0);
+  assert.deepEqual(result, { kind: 'success', text: '已排队。' });
   assert.doesNotMatch(JSON.stringify(result), /已经吃过饭|再点一份/);
-  assert.equal(h.disposes.length, 1);
+  await waitFor(() => h.disposes.length === 1);
+  assert.equal(h.followups.length, 0);
 });
 
 test('a forked judge that answers in Chinese still yields a verdict', async () => {
@@ -302,10 +358,11 @@ test('a forked judge that answers in Chinese still yields a verdict', async () =
   // "是" / "不成立" even when the prompt asks for YES / NO.
   const yes = harness({ fork: { text: '是' } });
   assert.equal((await invoke(yes, ' 条件\n执行指令')).kind, 'success');
-  assert.equal(yes.followups.length, 1);
+  await waitFor(() => yes.followups.length === 1);
 
   const no = harness({ fork: { text: '不成立' } });
-  assert.deepEqual(await invoke(no, ' 条件\n执行指令'), { kind: 'success', text: '条件不成立，未执行。' });
+  assert.deepEqual(await invoke(no, ' 条件\n执行指令'), { kind: 'success', text: '已排队。' });
+  await waitFor(() => no.disposes.length === 1);
   assert.equal(no.followups.length, 0);
 });
 
@@ -314,23 +371,32 @@ test('forked judge output with tool-call markup still yields a verdict', async (
   const result = await invoke(h, ' 条件\n执行指令');
 
   assert.equal(result.kind, 'success');
-  assert.equal(h.followups.length, 1);
+  await waitFor(() => h.followups.length === 1);
 });
 
-test('forked judge output without YES/NO is an error', async () => {
+test('forked judge output without YES/NO is reported without involving the model', async () => {
   const h = harness({ fork: { text: 'MAYBE' } });
   const result = await invoke(h, ' 条件\n秘密指令');
 
-  assert.equal(result.kind, 'error');
-  assert.match(result.text, /未返回 YES\/NO/);
-  assert.doesNotMatch(result.text, /秘密指令|MAYBE/);
-  assert.equal(h.followups.length, 0);
+  assert.equal(result.kind, 'success');
+  assert.doesNotMatch(JSON.stringify(result), /秘密指令|MAYBE/);
+  await waitFor(() => failureNotices(h.appends()).length === 1);
+  // The notice is a command card: visible in the chat, never read by the main
+  // model, and it costs no request.
+  assert.equal(h.followups.length, 0, 'nothing is queued as a user message');
+  assert.equal(h.calls.length, 0, 'no second model request');
+  const [notice] = failureNotices(h.appends());
+  assert.equal(notice.run.args, '条件\n秘密指令', 'the original input stays recoverable');
+  assert.equal(notice.done.kind, 'error');
+  assert.match(notice.done.text, /^【\/if 未执行】/);
+  assert.match(notice.done.text, /模型未返回 YES\/NO/);
   assert.equal(h.disposes.length, 1);
 });
 
 test('the tool guard keeps the judge child read-only, like plan mode', async () => {
   const h = harness({ fork: { text: 'YES' } });
   await invoke(h, ' 条件\n执行指令');
+  await waitFor(() => h.guardDuringJudge.length === 1);
 
   const guard = h.guard();
   assert.equal(typeof guard, 'function');
@@ -346,6 +412,7 @@ test('the tool guard keeps the judge child read-only, like plan mode', async () 
   assert.match(String(seen.childWrite), /只读模式/, 'the child tool runtime is armed too');
   assert.equal(seen.childRead, undefined);
   assert.equal(h.childGuardArmed(), 1);
+  await waitFor(() => h.followups.length === 1);
   assert.equal(h.childGuardReleased(), true, 'the child guard is released when judging ends');
 
   // Ownership is released when the judge returns, so a stale child id can no
@@ -360,19 +427,28 @@ test('a fork provider without prefix inheritance falls back to the transcript ju
   const result = await invoke(h, ' 条件\n执行指令');
 
   assert.equal(result.kind, 'success');
+  await waitFor(() => h.followups.length === 1);
   assert.equal(h.forks.length, 0, 'the non-inheriting provider is never used');
   assert.equal(h.calls.length, 1, 'the fallback transcript judge runs');
-  assert.equal(h.followups.length, 1);
 });
 
-test('a failing fork activation surfaces as a judge error and disposes', async () => {
-  const h = harness({ fork: { text: 'YES' }, forkThrows: new Error('fork unavailable') });
-  const result = await invoke(h, ' 条件\n执行指令');
+test('a failing fork activation falls back to the transcript judge', async () => {
+  const h = harness({ answer: 'YES', fork: { text: 'YES' }, forkThrows: new Error('fork unavailable') });
 
-  assert.equal(result.kind, 'error');
-  assert.match(result.text, /条件判断失败/);
-  assert.match(result.text, /fork unavailable/);
-  assert.equal(h.followups.length, 0);
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
+  await waitFor(() => h.followups.length === 1);
+  assert.equal(h.calls.length, 1, 'the transcript judge takes over');
+  assert.ok(
+    h.warnings().some((message) => /falling back/.test(message)),
+    'the fallback is logged',
+  );
+  assert.deepEqual(h.followups[0].content, [{ type: 'text', text: '执行指令' }]);
+});
+
+test('a judge provider that ignores abort still ends (slow, own suite)', async (t) => {
+  // Covered by test/slow.test.mjs: it must sit out the real 60s deadline, which
+  // is too slow for the default suite.
+  t.skip('runs in test/slow.test.mjs');
 });
 
 // ---------------------------------------------------------------------------
@@ -423,11 +499,12 @@ test('disposing the plugin drops a queued judge without judging', async () => {
   assert.equal(h.followups.length, 0);
 });
 
-test('an idle session is judged immediately', async () => {
+test('an idle session is judged at once, off the command handler', async () => {
   const h = harness({ fork: { text: 'YES' }, turns: [{ type: 'turn/start', seq: 0 }, { type: 'turn/end', seq: 1 }] });
   const result = await invoke(h, ' 条件\n执行指令');
 
-  assert.equal(result.kind, 'success');
+  assert.deepEqual(result, { kind: 'success', text: '已排队。' });
+  await waitFor(() => h.forks.length === 1);
   assert.ok(h.forks[0].eventsAtStart.includes('turn/end:1'));
 });
 
@@ -439,8 +516,8 @@ test('fallback YES sends exactly the instruction as a user message', async () =>
   const h = harness({ answer: 'YES' });
   const result = await invoke(h, ' 1+1=2\n请回复 OK');
 
-  assert.deepEqual(result, { kind: 'success', text: '条件成立，指令已作为用户消息发送。' });
-  assert.equal(h.followups.length, 1);
+  assert.deepEqual(result, { kind: 'success', text: '已排队。' });
+  await waitFor(() => h.followups.length === 1);
   assert.equal(h.followups[0].role, 'user');
   assert.equal(typeof h.followups[0].id, 'string');
   assert.notEqual(h.followups[0].id, '');
@@ -463,12 +540,12 @@ test('fallback judge call is isolated and leaves existing history untouched', as
   const before = JSON.stringify(messages);
   const h = harness({ answer: 'YES', messages });
   await invoke(h, ' 条件\n执行指令');
+  await waitFor(() => h.followups.length === 1);
 
   // The judge must not carry the main session id, and it must not mutate the
   // messages that form the reusable prefix of the main request.
   assert.equal(h.calls[0].sessionId, undefined);
   assert.equal(JSON.stringify(messages), before);
-  assert.equal(h.followups.length, 1);
 });
 
 test('--- separates a multi-line condition from the instruction', async () => {
@@ -476,6 +553,7 @@ test('--- separates a multi-line condition from the instruction', async () => {
   const result = await invoke(h, ' 用户说了 A\n并且说了 B\n---\n执行 C');
 
   assert.equal(result.kind, 'success');
+  await waitFor(() => h.streamDone() === 1);
   const judgePrompt = h.calls[0].messages[0].content[0].text;
   assert.match(judgePrompt, /用户说了 A\n并且说了 B/);
   assert.doesNotMatch(judgePrompt, /执行 C/);
@@ -509,6 +587,7 @@ test('prior context is included, system and developer messages are not', async (
   ];
   const h = harness({ answer: 'YES', messages });
   await invoke(h, ' 文件是否已经改成红色\n请运行测试');
+  await waitFor(() => h.followups.length === 1);
 
   const judgePrompt = h.calls[0].messages[0].content[0].text;
   assert.match(judgePrompt, /把文件改成红色/);
@@ -516,14 +595,17 @@ test('prior context is included, system and developer messages are not', async (
   assert.doesNotMatch(judgePrompt, /SECRET SYSTEM PROMPT|SECRET DEVELOPER/);
 });
 
-test('an unrecognised verdict is an error and does not send the instruction', async () => {
+test('an unrecognised verdict is reported and does not send the instruction', async () => {
   const h = harness({ answer: 'MAYBE' });
   const result = await invoke(h, ' 条件\n秘密指令');
 
-  assert.equal(result.kind, 'error');
-  assert.match(result.text, /未返回 YES\/NO/);
-  assert.doesNotMatch(result.text, /秘密指令|MAYBE/);
-  assert.equal(h.followups.length, 0);
+  assert.equal(result.kind, 'success');
+  assert.doesNotMatch(JSON.stringify(result), /秘密指令|MAYBE/);
+  await waitFor(() => failureNotices(h.appends()).length === 1);
+  assert.equal(h.followups.length, 0, 'the failure never becomes a user message');
+  const [notice] = failureNotices(h.appends());
+  assert.equal(notice.run.args, '条件\n秘密指令');
+  assert.match(notice.done.text, /模型未返回 YES\/NO/);
 });
 
 test('a provider without reasoningEffort support is retried once', async () => {
@@ -543,10 +625,10 @@ test('a provider without reasoningEffort support is retried once', async () => {
   const result = await invoke(h, ' 条件\n执行指令');
 
   assert.equal(result.kind, 'success');
+  await waitFor(() => h.followups.length === 1);
   assert.equal(h.calls.length, 2);
   assert.equal(h.calls[0].reasoningEffort, 'off');
   assert.equal(h.calls[1].reasoningEffort, undefined);
-  assert.equal(h.followups.length, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -586,8 +668,9 @@ test('a NO verdict drops the queued line so the turn opens no step', async () =>
 
   const decision = await h.preStep([queued]);
 
-  assert.equal(decision.kind, 'enter');
-  assert.deepEqual(decision.messages, []);
+  // Rejecting the entering batch is what actually ends the turn: an empty
+  // entering batch could still be refilled by an upstream pre-step handler.
+  assert.deepEqual(decision, { kind: 'reject' });
   assert.doesNotMatch(JSON.stringify(decision), /秘密指令/);
 });
 
@@ -599,6 +682,83 @@ test('an ordinary message is never judged at the turn boundary', async () => {
 
   assert.deepEqual(decision.messages, [normal]);
   assert.equal(h.forks.length, 0);
+});
+
+test('a failed judge leaves no message behind, only a command card', async () => {
+  const h = harness({ fork: { text: 'MAYBE' }, config: null });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n秘密指令' }] };
+
+  const decision = await h.preStep([queued]);
+
+  // The line is dropped: the turn ends without a model call, so the main model
+  // never reads the failure. The user still sees it as a card.
+  assert.deepEqual(decision, { kind: 'reject' });
+  assert.doesNotMatch(JSON.stringify(decision), /秘密指令/);
+  const [notice] = failureNotices(h.appends());
+  assert.ok(notice, 'the failure is recorded in the conversation');
+  assert.equal(notice.run.args, '条件\n秘密指令');
+  assert.match(notice.done.text, /^【\/if 未执行】/);
+  assert.match(notice.done.text, /模型未返回 YES\/NO/);
+});
+
+test('a judge that throws is reported as a command card too', async () => {
+  const h = harness({
+    config: null,
+    stream() {
+      throw new Error('judge route exploded');
+    },
+  });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n秘密指令' }] };
+
+  const decision = await h.preStep([queued]);
+
+  assert.equal(decision.kind, 'reject', 'the turn ends, so no message reaches the model');
+  const [notice] = failureNotices(h.appends());
+  assert.ok(notice, 'the failure is not swallowed');
+  assert.match(notice.done.text, /^【\/if 未执行】/);
+  assert.match(notice.done.text, /judge route exploded/);
+});
+
+test('a dropped /if does not drag the runtime context into a model request', async () => {
+  // Runtime context is not user input: it only exists to accompany real
+  // messages. A batch whose only real message was a `/if` that did not pass
+  // must end the turn, whether the context arrived inside the claimed batch (a
+  // fresh session) or was appended by the loop's default handler.
+  const context = {
+    id: 'ctx',
+    role: 'user',
+    source: { kind: 'runtime-context' },
+    content: [{ type: 'text', text: '[运行时上下文] 当前目录：C:\\work' }],
+  };
+
+  for (const [label, h] of [
+    ['NO', harness({ fork: { text: 'NO' }, config: null })],
+    ['a failed judge', harness({ fork: { text: 'MAYBE' }, config: null })],
+  ]) {
+    const queued = { id: 'm1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '/if 条件\n秘密指令' }] };
+    const appended = await h.preStep([queued], { context });
+    assert.equal(appended.kind, 'reject', `${label} must end the turn, not buy a request`);
+    const claimed = await h.preStep([context, queued]);
+    assert.equal(claimed.kind, 'reject', `${label} must also drop a claimed context`);
+  }
+
+  // A real message keeps the context alongside it.
+  const h = harness({ fork: { text: 'NO' }, config: null });
+  const normal = { id: 'm0', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '普通消息' }] };
+  const queued = { id: 'm1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '/if 条件\n秘密指令' }] };
+  const decision = await h.preStep([normal, queued], { context });
+  assert.deepEqual(decision.messages.map((message) => message.id), ['m0', 'ctx']);
+});
+
+test('a NO verdict drops only its own line from a mixed batch', async () => {
+  const h = harness({ fork: { text: 'NO' }, config: null });
+  const first = { id: 'a', role: 'user', content: [{ type: 'text', text: '普通消息' }] };
+  const queued = { id: 'b', role: 'user', content: [{ type: 'text', text: '/if 条件\n秘密指令' }] };
+  const last = { id: 'c', role: 'user', content: [{ type: 'text', text: '再问一句' }] };
+
+  const decision = await h.preStep([first, queued, last]);
+
+  assert.deepEqual(decision.messages.map((message) => message.id), ['a', 'c']);
 });
 
 test('the mode is read live, so a settings switch applies without a reload', async () => {
@@ -614,6 +774,8 @@ test('the mode is read live, so a settings switch applies without a reload', asy
   mode = 'background';
   const judged = await invoke(h, ' 条件\n执行指令');
   assert.equal(judged.kind, 'success');
-  assert.equal(judged.text, '条件成立，指令已作为用户消息发送。');
-  assert.equal(h.forks.length, 1, 'background mode judges inline');
+  assert.equal(judged.text, '已排队。');
+  await waitFor(() => h.forks.length === 1);
+  await waitFor(() => h.followups.length === 2);
+  assert.deepEqual(h.followups[1].content, [{ type: 'text', text: '执行指令' }]);
 });

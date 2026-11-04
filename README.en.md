@@ -113,6 +113,10 @@ and the tests have passed
 Start executing plan A
 ```
 
+The separator wins: once a lone `---` line is present, everything after it is the instruction.
+So never put a lone `---` (a Markdown horizontal rule) inside the instruction body — anything
+before it would be read as part of the condition.
+
 ### Judgment semantics
 
 - The judge is the model configured for the current session, not a JavaScript or math
@@ -140,7 +144,8 @@ Start executing plan A
   when the turn actually opens. The entry is the literal `/if <condition>` plus the instruction and
   shows up in the queue dock above the composer, so editing it edits condition and instruction.
 - `mode: background`: the 0.2.x behavior. The command returns "queued" at once and the judgement
-  runs in a background task, outside the session queue.
+  runs in a background task, outside the session queue. Because there is no queued entry to rewrite,
+  a failed judgement is recorded as an `if` command card explaining why.
 
 You can also skip the file: **Plugins → dsh-if → Configure** shows a "Judge mode" dropdown that
 applies immediately (`mode` is a volatile field, so the settings page rewrites the running config).
@@ -159,17 +164,25 @@ keys are ignored and a missing `mode` means `message`.
    the `agent/pre-step` waterfall; the plugin takes the claimed messages, picks the ones starting
    with `/if`, and judges them in place — the literal `/if` line never reaches the model history.
    On `YES` the message's content is replaced by the instruction; on `NO` the message is dropped.
-   If the whole batch is dropped, the host opens no step and the turn closes immediately.
+   If the judgement fails (timeout, unparseable output, the child cannot start), the entry is
+   dropped too and an `【/if 未执行】` error command card is logged (`command/run` +
+   `command/done`, log-only, never part of a model request) that names the reason and keeps the
+   original input for the "取回 /if" button on the right of that card. The card is logged after
+   the turn's `turn/end`, so it stays at the top level instead of being folded into the collapsed
+   turn-process group. When the dropped `/if` leaves nothing but plugin-injected context in the
+   batch, the interception rejects it (`{ kind: 'reject' }`) so the turn ends: a failed `/if` never
+   costs the main model a request, and never disappears without a trace.
 4. **Preferred path: a forked judge.** It resolves `ctx.subagents.getProvider('fork')`
    (requiring `inheritsParentContext === true`) and starts the child with
    `startActivation({ provider: 'fork', childId, request: { parent, agentOptions, prompt }, delivery: 'caller' })`.
    The request adds only one trailing user message (judging rules + condition); tools, system
    prompt, and history are inherited verbatim, so the prefix matches the main session's next request.
 5. **Inherited work is dropped.** The fork seed is the parent's log up to the last `turn/end`, and
-   next-turn messages queued before that boundary fall inside it. A child would run those copies as
-   its own turns first, so the verdict lands on the wrong turn. The plugin therefore removes every
-   pending inbox item except its own judge prompt when the child is created; the parent's queue is
-   untouched.
+   next-turn messages queued before that boundary — plus any next-step steering not yet claimed —
+   fall inside it. A child would run those copies as its own turns first, so the verdict lands on
+   the wrong turn and the steering even becomes judge work. The plugin therefore removes every
+   pending item in both inbox queues except its own judge prompt when the child is created; the
+   parent's queue is untouched.
 6. **Read-only at execution time.** The child inherits the full tool catalog, but a
    `ctx.tools.guard` guard — scoped to judge children only — allows `read` / `glob` / `grep` /
    `web_search` / `web_fetch` / `skill` and refuses every mutating or executing tool. The tool
@@ -183,9 +196,10 @@ keys are ignored and a missing `mode` means `message`.
    characters, keeping head and tail). One `ctx.llm.stream()` call then judges it. That request
    carries no main-session `sessionId`, so it cannot hit the main cache; it exists for
    compatibility only.
-9. **`background` mode** skips steps 2–3: the command reads `session.snapshotEvents()`, and while
-   a turn is open it hands the judgement to a background task and returns "queued" immediately;
-   the task waits for the turn to close (up to 30 minutes), then judges and delivers.
+9. **`background` mode** skips steps 2–3: the command hands the judgement to a serial background
+   chain and returns "queued" immediately. The verdict is delivered with `agent.followup` — the
+   instruction on `YES`, an `【/if 未执行】` command card on failure — and several `/if` commands
+   judge in send order.
 
 ## KV cache and context isolation
 
@@ -222,7 +236,8 @@ This is a design constraint, not an option:
 ## Tests
 
 ```powershell
-npm test
+npm test          # every suite in one process, no real model calls
+npm run test:slow # the 60s deadline case with a provider that ignores AbortSignal
 ```
 
 The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, and `agent`, and cover:
@@ -234,19 +249,30 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
 - tool-call markup in the judge output is stripped; output like `MAYBE` fails closed
 - the guard only covers judge children: `write` / `pwsh` are refused, `read` / `grep` pass,
   other sessions are untouched, and ownership is released once judging ends
-- the forked child drops work inherited from the parent's queue and keeps only its judge prompt
+- the forked child drops work inherited from the parent's queue — both `nextTurn` and `nextStep` —
+  and keeps only its judge prompt
 - `mode: message`: the command turns itself into an ordinary queued message; the turn boundary
   replaces `/if` with the instruction, drops it on `NO`, and leaves ordinary messages alone
-- `mode: background`: acknowledges at once while busy and judges after the turn closes
+- `mode: background`: returns "queued" at once, judges asynchronously, keeps send order
 - falling back to the transcript judge when no prefix-inheriting provider exists, and never
   using a non-inheriting provider
-- a failing fork activation surfaces as a judge error and sends nothing
+- a failing fork activation falls back to the transcript judge; when both fail, an `【/if 未执行】`
+  command card is logged instead of silently dropping the message, and the main model is never
+  asked about the failed condition
+- the judge deadline still ends the wait when the provider ignores `AbortSignal`
 - `---` multi-line conditions
 - missing instruction / empty instruction
 - filtering system / developer messages
 - retry when `reasoningEffort` is unsupported
 - judge prompt excludes the instruction; result text excludes the condition/verdict
 - the sent instruction carries `id` and `role: 'user'` so persisted sessions reload cleanly
+- a fake turn loop (`test/loop.test.mjs`) replaying the host's claim order and empty-batch behavior:
+  the instruction is committed before the step opens, `NO` opens no step, a failed judgement opens no
+  step and leaves a command card
+- the client half (`test/client.test.mjs`): settings read/write, a refused write is not shown as
+  saved, loading is not reported as read-only, "取回 /if" (registered on
+  `conversation.chat.commandview` under the `if` key) restores the command card's input, unload
+  releases the subscription
 
 ## Privacy
 
@@ -265,8 +291,10 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
 - A queued `/if` is a copy of an ordinary user message (`/if <condition>` + instruction). It is
   replaced by the instruction (YES) or dropped (NO) before the turn opens, so it never reaches model
   history; editing it edits both the condition and the instruction.
-- If judging fails (timeout, unrecognized verdict, no available route), the queued message is dropped
-  too and only a warning is logged. The UI shows nothing extra; check `command/done` and the DSH log.
+- When judging fails nothing is dropped silently and the main model is not bothered: the `/if` leaves
+  the batch, and an `【/if 未执行】` command card (reason + expandable explanation) is logged in the
+  session; "取回 /if" on the right of that card restores the original input for editing. `background`
+  mode has no queued entry, so it logs the same card. A warning is logged as well.
 - The read-only allowlist is static: tools that are not listed — including read-only MCP
   tools — are refused. Open an issue if you need one added.
 - On the fallback path the judge sees a plain-text transcript; images and files appear only as
