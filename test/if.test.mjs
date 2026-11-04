@@ -557,7 +557,7 @@ test('by default the command queues itself as an ordinary user message', async (
   const h = harness({ fork: { text: 'YES' }, config: null });
   const result = await invoke(h, ' 条件\n执行指令');
 
-  assert.deepEqual(result, { kind: 'success', text: '已排队：与普通消息同一队列，轮次开始时判断。' });
+  assert.deepEqual(result, { kind: 'success' });
   assert.equal(h.forks.length, 0, 'queueing must not judge before the turn boundary');
   assert.equal(h.followups.length, 1);
   assert.equal(h.followups[0].role, 'user');
