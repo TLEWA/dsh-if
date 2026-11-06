@@ -31,7 +31,7 @@ existing prefix is not rewritten.
 | Two queueing modes | `message` (default) shares the queue; `background` keeps the 0.2.x behavior: the command returns at once and judges in a background task |
 | Send only when true | Only `YES` sends the instruction as a user message; `NO` never wakes the main agent |
 | Judgment stays out of context | Judging happens in a separate child session; no main-session event and no `agent.inject` |
-| Command arguments stay private | `recordInput: false`, so even the log-only `command/run` event omits them |
+| Command arguments stay out of history | `recordInput: false` keeps the condition and instruction out of the input history; only a failed judgement writes them into the log-only `command/run` `args`, which the "取回 /if" button reuses |
 | Multi-line conditions | First line is the condition, the rest is the instruction; use a lone `---` line for multi-line conditions |
 | Automatic fallback | When the host has no prefix-inheriting fork provider, the judge falls back to one `ctx.llm.stream` call over a ~24k-character plain-text transcript |
 | Fail closed | Empty condition/instruction, an unrecognized verdict, or a timeout returns an error and sends nothing |
