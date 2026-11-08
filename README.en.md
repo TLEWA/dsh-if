@@ -57,13 +57,13 @@ Requirements:
 Pin a version:
 
 ```text
-dsh-if@0.3.4
+dsh-if@0.3.5
 ```
 
 Equivalent CLI command:
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.3.4
+dsh plugin --profile desktop add dsh-if@0.3.5
 ```
 
 ### From GitHub
@@ -77,11 +77,11 @@ https://github.com/TLEWA/dsh-if
 Pin a tag or the release tarball:
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.4
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.5
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.3.4/dsh-if-0.3.4.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.3.5/dsh-if-0.3.5.tgz
 ```
 
 ### From source
@@ -312,6 +312,16 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
   session events when debugging.
 - This command is intended for clear conditions and a single instruction. For complex
   branching, use ordinary chat.
+
+## Other DSH projects I work on
+
+`/if` is only one corner of DSH. These are the other plugins I maintain — take what fits.
+
+- **[dsh-sidebar-row-menu](https://github.com/TLEWA/dsh-sidebar-row-menu)** — right-click menus for sidebar rows: workspace rows, session rows and the conversation body each get their own menu, with "Open with" and "More actions" submenus.
+- **[dsh-sidebar-organizer](https://github.com/TLEWA/dsh-sidebar-organizer)** — a layout organizer for seven regions: sidebar, sidebar footer, conversation tabs, composer, session header, right panel, and settings navigation all support long-press drag to reorder, and panels can be tucked into "More".
+- **[dsh-better-choice](https://github.com/TLEWA/dsh-better-choice)** — an `ask_user_question` enhancement: right-click an option to add a note, or ask the model a side question with the same context before choosing.
+- **[dsh-utf8-output](https://github.com/TLEWA/dsh-utf8-output)** — fixes GBK/CP936/CP932 mojibake from DSH subprocess output on Windows.
+- **[dsh-opencode-go-router](https://github.com/TLEWA/dsh-opencode-go-router)** — rotates OpenCode Go routing after a context fold or a system-prompt rewrite, so less of the prompt cache is lost.
 
 ## License
 

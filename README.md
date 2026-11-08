@@ -53,13 +53,13 @@
 固定版本：
 
 ```text
-dsh-if@0.3.4
+dsh-if@0.3.5
 ```
 
 命令行等价写法：
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.3.4
+dsh plugin --profile desktop add dsh-if@0.3.5
 ```
 
 ### 从 GitHub 安装
@@ -73,11 +73,11 @@ https://github.com/TLEWA/dsh-if
 固定到标签或 Release 附件：
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.4
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.3.5
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.3.4/dsh-if-0.3.4.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.3.5/dsh-if-0.3.5.tgz
 ```
 
 ### 从源码安装
@@ -265,6 +265,16 @@ npm run test:slow # 单独跑「provider 忽略 abort」的 60 秒截止用例
 - 判断使用当前会话的 provider/model；当前会话没有可用路由时返回错误。
 - UI 结果是通用的，不展示条件和判断理由；需要排查时请查看 DSH 日志或会话事件。
 - 该命令适合“条件明确、指令单一”的场景；需要复杂分支时，建议直接用普通对话。
+
+## 我的其他 DSH 项目
+
+`/if` 只是 DSH 的一小块。下面这些插件都由我维护，按需取用。
+
+- **[dsh-sidebar-row-menu](https://github.com/TLEWA/dsh-sidebar-row-menu)** —— 侧栏行右键菜单：工作区行、会话行与会话正文各有自己的右键菜单，含「打开方式」「更多操作」二级菜单。
+- **[dsh-sidebar-organizer](https://github.com/TLEWA/dsh-sidebar-organizer)** —— 七区域布局整理器：侧栏、侧栏底部、对话标签、输入框、会话头部、右侧栏、设置导航都能长按拖拽排序，面板可以收进「更多」再拖回来。
+- **[dsh-better-choice](https://github.com/TLEWA/dsh-better-choice)** —— `ask_user_question` 增强：右键选项补备注，选之前先拿同一份上下文旁问模型一句。
+- **[dsh-utf8-output](https://github.com/TLEWA/dsh-utf8-output)** —— 修复 Windows 下 DSH 子进程 GBK/CP936/CP932 输出乱码。
+- **[dsh-opencode-go-router](https://github.com/TLEWA/dsh-opencode-go-router)** —— 上下文折叠或系统提示被重写后轮换 OpenCode Go 路由，少丢一点提示缓存。
 
 ## License
 
