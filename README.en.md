@@ -242,8 +242,8 @@ This is a design constraint, not an option:
 ## Tests
 
 ```powershell
-npm test          # every suite in one process, no real model calls
-npm run test:slow # the 60s deadline case with a provider that ignores AbortSignal
+npm test
+npm run test:slow
 ```
 
 The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, and `agent`, and cover:

@@ -21,3 +21,4 @@ tmp/
 Thumbs.db
 .idea/
 .vscode/
+.ci/

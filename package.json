@@ -21,7 +21,8 @@
     "NOTICE.md",
     "NOTICE.en.md",
     "AI_USAGE.md",
-    "AI_USAGE.en.md"
+    "AI_USAGE.en.md",
+    "CHANGELOG.en.md"
   ],
   "keywords": [
     "deepseek",
@@ -65,14 +66,15 @@
     }
   },
   "engines": {
-    "node": ">=20.3"
+    "node": ">=20.3",
+    "dsh": ">=0.2.1-rc.5"
   },
   "scripts": {
     "check": "node --check lib/index.js && node --check lib/client.js && node --check test/if.test.mjs && node --check test/loop.test.mjs && node --check test/client.test.mjs",
     "test": "node test/run.mjs",
     "test:slow": "node test/slow.test.mjs",
     "prepack": "npm run check && npm test",
-    "prepublishOnly": "npm run check && npm test"
+    "prepublishOnly": "npx --yes --package=github:TLEWA/dsh-plugin-ci#v1 dsh-ci-gate --prepublish"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.5"

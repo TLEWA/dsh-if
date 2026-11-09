@@ -1,0 +1,87 @@
+{
+  "$schema": "https://raw.githubusercontent.com/TLEWA/dsh-plugin-ci/v1/schema/ci.config.schema.json",
+  "selfHosted": false,
+  "version": 1,
+  "build": null,
+  "typecheck": null,
+  "test": "node test/run.mjs",
+  "testGlobs": [
+    "test/**/*.test.mjs"
+  ],
+  "manifest": {
+    "manifestVersion": 1,
+    "requireEnginesNode": true,
+    "allowedInject": [
+      "@deepseek-ai/*"
+    ]
+  },
+  "docs": {
+    "pairs": [
+      [
+        "README.md",
+        "README.en.md"
+      ],
+      [
+        "CHANGELOG.md",
+        "CHANGELOG.en.md"
+      ]
+    ],
+    "required": [
+      "README.md",
+      "README.en.md",
+      "CHANGELOG.md",
+      "CHANGELOG.en.md",
+      "LICENSE",
+      "NOTICE.md",
+      "NOTICE.en.md",
+      "AI_USAGE.md",
+      "AI_USAGE.en.md",
+      "AGENTS.md",
+      ".github/PULL_REQUEST_TEMPLATE.md",
+      ".github/workflows/ci.yml",
+      ".github/workflows/drift.yml",
+      ".github/workflows/release.yml"
+    ],
+    "published": [
+      "README.md",
+      "README.en.md",
+      "CHANGELOG.md",
+      "CHANGELOG.en.md",
+      "LICENSE",
+      "NOTICE.md",
+      "NOTICE.en.md",
+      "AI_USAGE.md",
+      "AI_USAGE.en.md"
+    ]
+  },
+  "tarball": {
+    "mustInclude": [
+      "lib/index.js",
+      "lib/client.js",
+      "cordis.patch.yml",
+      "README.md",
+      "README.en.md",
+      "CHANGELOG.md",
+      "CHANGELOG.en.md",
+      "LICENSE",
+      "NOTICE.md",
+      "NOTICE.en.md",
+      "AI_USAGE.md",
+      "AI_USAGE.en.md"
+    ],
+    "mustExclude": [
+      "test/**",
+      ".github/**",
+      "*.tgz",
+      "node_modules/**"
+    ],
+    "maxBytes": 2097152
+  },
+  "release": {
+    "publish": true,
+    "provenance": true
+  },
+  "guards": {
+    "requireHumanApprovedLabel": true
+  }
+}

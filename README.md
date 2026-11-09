@@ -214,8 +214,8 @@ volatile 字段，设置页直接改写运行中的配置）。
 ## 测试
 
 ```powershell
-npm test          # 进程内跑全部套件，不启动真实模型
-npm run test:slow # 单独跑「provider 忽略 abort」的 60 秒截止用例
+npm test
+npm run test:slow
 ```
 
 测试使用 mock 的 `ctx.commands`、`ctx.llm`、`ctx.subagents`、`ctx.tools` 和 `agent`，覆盖：
