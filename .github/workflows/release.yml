@@ -1,55 +1,18 @@
-name: Release
+name: release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v*.*.*']
 
 permissions:
   contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
-    name: Package and publish
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out the tagged commit
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund
-
-      - name: Verify the tag matches package.json
-        run: |
-          node -e "const p = require('./package.json'); const tag = process.env.GITHUB_REF_NAME; if ('v' + p.version !== tag) { console.error('tag ' + tag + ' does not match package version v' + p.version); process.exit(1); }"
-
-      - name: Syntax check
-        run: npm run check
-
-      - name: Test
-        run: npm test
-
-      - name: Build the package
-        run: npm pack
-
-      - name: Write checksums
-        run: sha256sum dsh-if-*.tgz > SHA256SUMS.txt
-
-      - name: Publish the GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag="$GITHUB_REF_NAME"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" dsh-if-*.tgz SHA256SUMS.txt --clobber
-          else
-            gh release create "$tag" dsh-if-*.tgz SHA256SUMS.txt \
-              --title "$tag" --generate-notes --verify-tag
-          fi
+    uses: TLEWA/dsh-plugin-ci/.github/workflows/reusable-release.yml@v1
+    secrets: inherit
