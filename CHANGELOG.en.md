@@ -4,6 +4,8 @@ All notable changes are documented here. Versions follow [Semantic Versioning](h
 
 ## [Unreleased]
 
+- Adopt shared Codex PR review rules and repository-specific review guidance; preserve existing CI, human approval, and release behavior.
+
 ### Fixed
 
 - **Cancellation swallowed already-judged /if entries.** When the batch was cancelled after
