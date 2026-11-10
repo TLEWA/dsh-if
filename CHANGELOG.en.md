@@ -2,6 +2,36 @@
 
 All notable changes are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Cancellation swallowed already-judged /if entries.** When the batch was cancelled after
+  judging finished but before the instruction was sent, the old code only threw, losing the
+  judged entries and the user's input. Each judged `/if` now leaves an
+  `【/if 未执行】` card saying it was cancelled and not executed; the original input can still
+  be recovered from the card, and a cancelled instruction is never sent.
+- **The judge child's read-only guard lapsed after release.** Teardown used to release
+  ownership and then fire-and-forget dispose, so the same child could write while disposal was
+  still running. Now dispose is awaited (up to one second) before release; a failed or timed-out
+  dispose keeps a read-only tombstone with a warning and releases once it really finishes, without
+  parking the host turn.
+- **Fork failures copied the child output into warnings.** When the child ended with
+  `stopReason: 'error'`, the truncated output was used as the failure reason and could contain the
+  condition text. It now reports a generic "judge failed"; only `DSH_IF_DEBUG=1` logs the
+  truncated detail (never in the card).
+- **A turn-wait timeout only logged a warning.** In `background` mode, waiting 30 minutes for
+  `turn/end` used to end with a log line and no user-visible notice. It now records an
+  `【/if 未执行】` card immediately, explaining the timeout; the turn is never judged later.
+
+### Tests
+
+- **The slow test was not in the default entry.** `test/run.mjs` imported only three suites,
+  leaving `slow.test.mjs` to Node's implicit discovery; Node 24 spawned an isolated child for it,
+  hid the result, and kept the entry around 65s. The slow test is now imported explicitly with its
+  name reported, and `DSH_IF_TEST_FAST_JUDGE=1` shortens only that run's deadline to 150ms;
+  `npm run test:slow` still verifies the real 60s contract, and the default entry drops to ~3s.
+
 ## [0.3.5] - 2026-11-06
 
 ### Fixed

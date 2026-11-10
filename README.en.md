@@ -246,6 +246,12 @@ npm test
 npm run test:slow
 ```
 
+`npm test` explicitly includes the slow test
+`a provider that ignores abort cannot park the judge forever` and uses
+`DSH_IF_TEST_FAST_JUDGE=1` to shorten only that run's deadline to 150ms; `npm run test:slow`
+has no such flag and still waits out the real 60s product contract. The entry passes an explicit
+file list so Node 24's test-file discovery cannot spawn a separate isolated child.
+
 The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, and `agent`, and cover:
 
 - registration and `recordInput: false`
@@ -254,7 +260,7 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
 - `YES` sends exactly the instruction; `NO` sends nothing
 - tool-call markup in the judge output is stripped; output like `MAYBE` fails closed
 - the guard only covers judge children: `write` / `pwsh` are refused, `read` / `grep` pass,
-  other sessions are untouched, and ownership is released once judging ends
+  other sessions are untouched, and ownership is released after the child's dispose completes
 - the forked child drops work inherited from the parent's queue — both `nextTurn` and `nextStep` —
   and keeps only its judge prompt
 - `mode: message`: the command turns itself into an ordinary queued message; the turn boundary
@@ -265,12 +271,17 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
 - a failing fork activation falls back to the transcript judge; when both fail, an `【/if 未执行】`
   command card is logged instead of silently dropping the message, and the main model is never
   asked about the failed condition
-- the judge deadline still ends the wait when the provider ignores `AbortSignal`
+- the judge deadline still ends the wait when the provider ignores `AbortSignal`; the default
+  entry injects 150ms, while `test:slow` exercises the real 60s wait
+- a `background` turn-wait timeout leaves an `【/if 未执行】` card instead of only a log line
+- a cancellation that lands after judging leaves an `【/if 未执行】` cancellation card per judged
+  `/if` and never sends the instruction
 - `---` multi-line conditions
 - missing instruction / empty instruction
 - filtering system / developer messages
 - retry when `reasoningEffort` is unsupported
-- judge prompt excludes the instruction; result text excludes the condition/verdict
+- judge prompt excludes the instruction; result text excludes the condition/verdict;
+  a failed fork's output never reaches logs or cards
 - the sent instruction carries `id` and `role: 'user'` so persisted sessions reload cleanly
 - a fake turn loop (`test/loop.test.mjs`) replaying the host's claim order and empty-batch behavior:
   the instruction is committed before the step opens, `NO` opens no step, a failed judgement opens no
@@ -287,6 +298,8 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
   for the current session, over the same model channel as normal chat.
 - Conditions and context may contain sensitive data; do not put anything into `/if` that
   you would not send to your model provider.
+- Failure logs and cards carry only a generic reason. Only when `DSH_IF_DEBUG=1` is set does
+  the log keep the truncated child error output (which may quote the condition; cards never do).
 
 ## Known limitations
 
@@ -301,6 +314,12 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
   the batch, and an `【/if 未执行】` command card (reason + expandable explanation) is logged in the
   session; "取回 /if" on the right of that card restores the original input for editing. `background`
   mode has no queued entry, so it logs the same card. A warning is logged as well.
+- When a batch is cancelled after judging but before the instruction is sent, every judged `/if`
+  leaves an `【/if 未执行】` card (reason "batch cancelled") and the instruction is not executed;
+  a cancellation during judging records the whole batch as failed cards.
+- The judge child's read-only guard stays armed until dispose completes. If dispose fails or
+  takes longer than one second, a warning is logged and a read-only tombstone remains until it
+  really finishes; the host turn is not parked by it.
 - The read-only allowlist is static: tools that are not listed — including read-only MCP
   tools — are refused. Open an issue if you need one added.
 - On the fallback path the judge sees a plain-text transcript; images and files appear only as

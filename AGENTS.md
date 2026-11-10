@@ -22,7 +22,9 @@
 - judge 只用 `inheritsParentContext` 的 fork provider；只追加一条尾部 user 消息，guard 只读；
   不要复用不继承前缀的 provider。
 - 判断失败不能静默：留 log-only 命令卡片 `【/if 未执行】`，不向主线模型发消息，也不丢用户输入。
-- `test/run.mjs` 必须 in-process 导入 if/loop/client 三个 suite 后 `run({concurrency:1})`；
+- `test/run.mjs` 必须 in-process 导入 if/loop/client，并显式导入 slow 套件
+  （`DSH_IF_TEST_FAST_JUDGE=1` 只缩短本次死线），然后 `run({concurrency:1, files: []})`；
+  `files: []` 防止 Node 24 自动发现测试文件并拉起隔离子进程。
   `node --test test/` 在 DSH 沙箱会 spawn EPERM，不要改回去。
 - 新增 suite 要同时加到 `run.mjs` 的 import 和 `npm run check` 的 `node --check` 列表。
 - 隐私：judge prompt 不含指令正文；结果与日志不泄露条件和判断原文。

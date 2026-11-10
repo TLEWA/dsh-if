@@ -70,7 +70,7 @@
     "dsh": ">=0.2.1-rc.5"
   },
   "scripts": {
-    "check": "node --check lib/index.js && node --check lib/client.js && node --check test/if.test.mjs && node --check test/loop.test.mjs && node --check test/client.test.mjs",
+    "check": "node --check lib/index.js && node --check lib/client.js && node --check test/if.test.mjs && node --check test/loop.test.mjs && node --check test/client.test.mjs && node --check test/slow.test.mjs",
     "test": "node test/run.mjs",
     "test:slow": "node test/slow.test.mjs",
     "prepack": "npm run check && npm test",

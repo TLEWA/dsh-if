@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { apply } from '../lib/index.js';
+import { apply, __testing } from '../lib/index.js';
 
 /**
  * Build a fake DSH host.
@@ -18,6 +18,8 @@ function harness({
   stream,
   fork,
   forkThrows,
+  forkStopReason = 'completed',
+  forkDispose,
   forkInherits = true,
   inherited = [],
   inheritedSteps = [],
@@ -157,11 +159,12 @@ function harness({
         if (forkThrows !== undefined) throw forkThrows;
         return {
           result: Promise.resolve({
-            stopReason: 'completed',
+            stopReason: forkStopReason,
             output: fork.text === undefined ? [] : [{ type: 'text', text: fork.text }],
           }),
           dispose: async () => {
             disposes.push(options.childId);
+            await forkDispose?.(options.childId);
           },
         };
       },
@@ -523,6 +526,78 @@ test('the tool guard keeps the judge child read-only, like plan mode', async () 
   assert.equal(guard({ agent: { id: childId } }), undefined);
 });
 
+test('the judge guard stays armed until the child is disposed', async () => {
+  let releaseDispose;
+  const disposeGate = new Promise((resolve) => {
+    releaseDispose = resolve;
+  });
+  let disposeStarted = 0;
+  const h = harness({
+    fork: { text: 'YES' },
+    forkDispose: async () => {
+      disposeStarted += 1;
+      await disposeGate;
+    },
+  });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n执行指令' }] };
+  let finished = false;
+  const pending = h.preStep([queued]).finally(() => {
+    finished = true;
+  });
+
+  await waitFor(() => disposeStarted === 1);
+  const childId = h.forks[0].childId;
+  const guard = h.guard();
+  assert.equal(finished, false, 'the batch waits for a completed teardown');
+  assert.match(String(guard({ agent: { id: childId }, name: 'write' })), /只读模式/,
+    'the read-only contract outlives the verdict while disposal is in flight');
+
+  releaseDispose();
+  await pending;
+  assert.equal(guard({ agent: { id: childId }, name: 'write' }), undefined,
+    'releasing ownership after disposal makes the stale child id ordinary again');
+});
+
+test('a failed judge teardown keeps the guard instead of silently releasing it', async () => {
+  const h = harness({
+    fork: { text: 'YES' },
+    forkDispose: async () => {
+      throw new Error('dispose boom');
+    },
+  });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n执行指令' }] };
+  const decision = await h.preStep([queued]);
+
+  const childId = h.forks[0].childId;
+  assert.equal(decision.kind, 'enter', 'judging still succeeds');
+  assert.ok(h.warnings().some((warning) => /teardown failed/.test(warning)),
+    'the failure is reported');
+  assert.match(String(h.guard()({ agent: { id: childId }, name: 'write' })), /只读模式/,
+    'a tombstone keeps a child that could not be torn down read-only');
+});
+
+test('a hung dispose cannot park the judge forever and releases once it settles', async () => {
+  let releaseDispose;
+  const disposeGate = new Promise((resolve) => {
+    releaseDispose = resolve;
+  });
+  const h = harness({
+    fork: { text: 'YES' },
+    forkDispose: () => disposeGate,
+  });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n执行指令' }] };
+  const pending = h.preStep([queued]);
+
+  await waitFor(() => h.warnings().some((warning) => /teardown timed out/.test(warning)), 3000);
+  const childId = h.forks[0].childId;
+  await pending;
+  assert.match(String(h.guard()({ agent: { id: childId }, name: 'write' })), /只读模式/,
+    'the guard stays until disposal really finishes');
+
+  releaseDispose();
+  await waitFor(() => h.guard()({ agent: { id: childId }, name: 'write' }) === undefined);
+});
+
 test('a 0.2.2 tool execution without an owning agent is never denied', async () => {
   const h = harness({ fork: { text: 'YES' } });
   await invoke(h, ' 条件\n执行指令');
@@ -545,6 +620,25 @@ test('a fork provider without prefix inheritance falls back to the transcript ju
   assert.equal(h.calls.length, 1, 'the fallback transcript judge runs');
 });
 
+test('a judge failure never echoes the child output into warnings or cards', async () => {
+  const secret = 'SECRET-CHILD-OUTPUT-4f19';
+  const h = harness({
+    fork: { text: secret },
+    forkStopReason: 'error',
+    stream() {
+      throw new Error('fallback judge failed');
+    },
+  });
+
+  assert.equal((await invoke(h, ' 条件\n秘密指令')).kind, 'success');
+  await waitFor(() => failureNotices(h.appends()).length === 1);
+
+  const seen = `${JSON.stringify(h.appends())}\n${h.warnings().join('\n')}`;
+  assert.doesNotMatch(seen, new RegExp(secret), 'child output may contain the condition text');
+  const [notice] = failureNotices(h.appends());
+  assert.match(notice.done.text, /判断器执行失败|判断失败/);
+});
+
 test('a failing fork activation falls back to the transcript judge', async () => {
   const h = harness({ answer: 'YES', fork: { text: 'YES' }, forkThrows: new Error('fork unavailable') });
 
@@ -556,12 +650,6 @@ test('a failing fork activation falls back to the transcript judge', async () =>
     'the fallback is logged',
   );
   assert.deepEqual(h.followups[0].content, [{ type: 'text', text: '执行指令' }]);
-});
-
-test('a judge provider that ignores abort still ends (slow, own suite)', async (t) => {
-  // Covered by test/slow.test.mjs: it must sit out the real 60s deadline, which
-  // is too slow for the default suite.
-  t.skip('runs in test/slow.test.mjs');
 });
 
 // ---------------------------------------------------------------------------
@@ -586,6 +674,22 @@ test('a busy session acknowledges at once, then judges the closed turn', async (
   await waitFor(() => h.followups.length === 1);
   assert.equal(h.forks.length, 1);
   assert.ok(h.forks[0].eventsAtStart.includes('turn/end:1'), 'the judge starts only after the turn closed');
+});
+
+test('a queued judge that times out waiting for the turn leaves a failure card', async () => {
+  __testing.setTurnWait(10);
+  try {
+    const h = harness({ fork: { text: 'YES' }, turns: [{ type: 'turn/start', seq: 0 }] });
+    await invoke(h, ' 条件\n执行指令');
+
+    await waitFor(() => failureNotices(h.appends()).length === 1);
+    const [notice] = failureNotices(h.appends());
+    assert.match(notice.done.text, /等待当前回合结束超时/);
+    assert.equal(h.forks.length, 0, 'a cancelled wait must not judge');
+    assert.equal(h.followups.length, 0);
+  } finally {
+    __testing.setTurnWait(undefined);
+  }
 });
 
 test('a queued judge still fires when the next turn starts immediately', async () => {
@@ -812,6 +916,31 @@ test('a failed judge leaves no message behind, only a command card', async () =>
   assert.equal(notice.run.args, '条件\n秘密指令');
   assert.match(notice.done.text, /^【\/if 未执行】/);
   assert.match(notice.done.text, /模型未返回 YES\/NO/);
+});
+
+test('an aborted batch keeps a cancellation card for verdicts already judged', async () => {
+  let h;
+  // Flip `aborted` only after the fork's dispose runs: by then the NO verdict
+  // has been judged and Promise.all has resolved, so the batch is on its way to
+  // the loop when the cancellation lands.
+  const signal = {
+    get aborted() {
+      return h !== undefined && h.disposes.length > 0;
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  h = harness({ fork: { text: 'NO' }, config: null });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n秘密指令' }] };
+
+  await assert.rejects(h.preStep([queued], { signal }), /已取消/);
+
+  const [notice] = failureNotices(h.appends());
+  assert.ok(notice, 'a cancelled /if must not disappear without a card');
+  assert.match(notice.done.text, /^【\/if 未执行】/);
+  assert.match(notice.done.text, /取消/);
+  assert.equal(notice.run.args, '条件\n秘密指令', 'the original input stays recoverable');
+  assert.equal(h.followups.length, 0, 'a cancelled instruction is never sent');
 });
 
 test('a judge that throws is reported as a command card too', async () => {
