@@ -218,25 +218,32 @@ npm test
 npm run test:slow
 ```
 
+`npm test` 会显式包含慢测试 `a provider that ignores abort cannot park the judge forever`，
+并用 `DSH_IF_TEST_FAST_JUDGE=1` 只把这次运行的死线缩短到 150ms；`npm run test:slow` 不带
+该变量，仍按产品契约等待真实 60 秒。入口使用显式文件列表，避免 Node 24 的测试文件自动发现
+另外拉起隔离子进程。
+
 测试使用 mock 的 `ctx.commands`、`ctx.llm`、`ctx.subagents`、`ctx.tools` 和 `agent`，覆盖：
 
 - 注册信息与 `recordInput: false`
 - fork 判断只追加一条尾部消息、`agentOptions.maxTokens` 收敛、子会话被释放
 - `YES` 只发送指令、`NO` 不发送
 - 判断输出里的 tool-call 标记会被剥离，`MAYBE` 之类的输出按失败处理
-- guard 只拦判断子会话：`write` / `pwsh` 被拒，`read` / `grep` 放行，其它会话不受影响，判断结束即释放归属
+- guard 只拦判断子会话：`write` / `pwsh` 被拒，`read` / `grep` 放行，其它会话不受影响，归属在子会话 dispose 完成后才释放
 - fork 子会话会丢弃从父会话队列继承来的待办——`nextTurn` 和 `nextStep` 都清，只留自己的判断 prompt
 - `mode: message`：默认把命令转成普通排队消息；轮次边界把 `/if` 换成指令、`NO` 时丢弃、普通消息不判断
 - `mode: background`：命令立即返回"已排队"，判断异步完成；多个 `/if` 保持发送顺序
 - 没有可继承上下文的 fork provider 时回退到 transcript 判断，且绝不复用不继承前缀的 provider
 - fork 启动失败时回退到 transcript 判断；两条路都失败时记一张 `【/if 未执行】` 命令卡片而不是静默丢弃，
   且不会给主线模型发消息
-- 判断超时（provider 完全忽略 `AbortSignal`）也会在 60 秒后结束，不会卡住回合
+- 判断超时（provider 完全忽略 `AbortSignal`）也会结束，不会卡住回合；默认入口用注入的 150ms 验证，`test:slow` 用真实 60 秒验证
+- `background` 等待回合结束超时会留下 `【/if 未执行】` 卡片，而不是只写日志
+- 判断完成后才收到取消时，已判定的 `/if` 仍会各留一张 `【/if 未执行】` 取消卡片，且不会发送
 - `---` 多行条件
 - 缺少指令 / 空指令
 - 过滤 system / developer 消息
 - 不支持 `reasoningEffort` 时的重试
-- 判断 prompt 不含指令，结果文本不含条件或判断原文
+- 判断 prompt 不含指令，结果文本不含条件或判断原文；fork 失败输出不会进入日志或卡片
 - 发送的指令消息带 `id` 和 `role: 'user'`，持久化 session 可以正常重载
 - 假回合循环（`test/loop.test.mjs`）：按宿主的真实领取顺序（先 next-step、再一条 next-turn）跑一轮，
   验证指令在 step 提交前就被替换、`NO` 不会打开 step、判断失败时这一轮不打开 step 且留下命令卡片
@@ -248,6 +255,8 @@ npm run test:slow
 - 插件不含遥测、统计上报或第三方远程请求。
 - 判断时会把“当前会话已有上下文 + 条件”发送给当前会话配置的模型提供商，与正常对话走同一条模型通道。
 - 条件和上下文可能包含敏感信息；不要把不希望发送给模型提供商的内容写进 `/if` 条件。
+- 判断失败的日志和卡片只写通用原因；只有显式设置环境变量 `DSH_IF_DEBUG=1` 时，日志才会记录
+  子会话错误输出的截断详情（可能包含条件原文，卡片始终不含）。
 
 ## 已知限制
 
@@ -259,6 +268,10 @@ npm run test:slow
 - 判断失败时不会静默丢弃，也不会打扰主线模型：那条 `/if` 会从批次里移除，同时在会话里记一张
   `【/if 未执行】` 命令卡片（失败原因 + 可展开的说明），点这张卡片右侧的「取回 /if」即可把原文
   放回输入框重发。`background` 模式没有排队条目，失败时同样记一张命令卡片。日志里也会留一条 warning。
+- 批次在判断完成、指令发出之前被取消时，已判完的 `/if` 会各留一张 `【/if 未执行】` 卡片
+  （原因写明“批次已取消”），指令不会执行；取消发生在判断过程中时，整批按失败记录卡片。
+- 判断子会话的只读 guard 会保留到 dispose 完成：dispose 失败或超过 1 秒未完成时先记 warning
+  并保留墓碑（该 child 仍按只读处理），待它真正结束后再释放；不会因此卡住宿主回合。
 - 只读白名单是静态名单：未列出的工具（包括 MCP 只读工具）会被拒绝；需要放宽时请提 issue。
 - 回退路径（host 没有 fork provider）看到的是纯文本记录，图片和文件只显示 `[图片]` / `[文件]` 占位符，
   条件需要的信息如果不在最近约 24k 字符的记录里，会被判为不成立。
