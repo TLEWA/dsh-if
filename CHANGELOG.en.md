@@ -12,11 +12,16 @@ All notable changes are documented here. Versions follow [Semantic Versioning](h
 - **Dispose no longer deletes a queued line the user edited.** The queue panel can turn `/if …` into an
   ordinary message in place, keeping its id; the unload cleanup now only removes an entry that still
   carries the exact `/if` text it queued, and leaves edited input for the main model.
-- **A negative verdict was read as YES.** When the judge answered "尚未成立", "未满足",
-  "是错误的" or "YES，但条件并不成立", the old parser matched the positive word inside the
-  sentence and sent the instruction; conversely "否则不需要执行" was read as a bare "否" and
-  silently treated as NO. Negation now goes through `isNegativeVerdict()` first, and a bare
-  "否" only counts as its own word or as the opening of the sentence.
+- **Verdicts are now strictly `Yes` / `No`; anything else is asked again.** The old parser
+  guessed with positive word lists, negation prefixes, and a whole-string fallback, so
+  "YES，但条件并不成立" was read as true and "否则不需要执行" as false. The parser now accepts only
+  the bare words `Yes` / `No` (case, surrounding quotes, and code fences tolerated) and never
+  guesses at anything else: the same condition is asked again instead.
+- **New `judgeRetries` config (default 3, range 0-5, 0 = never retry).** When retries run out
+  without a valid answer the command fails closed, sends nothing, and leaves an
+  `【/if 未执行】` card. Retries share the first attempt's 60-second judging budget, so one
+  judgement cannot stretch into several timeouts. The judge prompt now states the same rule:
+  answer only Yes or No.
 - **Queued /if lines leaked to the main model on unload.** In message mode `/if …` is first
   queued as an ordinary user message and rewritten by `agent/pre-step`; if the plugin was
   disabled or unloaded before that, the old code only aborted the background judgment and the
