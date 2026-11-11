@@ -241,6 +241,10 @@ This is a design constraint, not an option:
 ## Compatibility
 
 - Verified on DSH `0.2.1-rc.5` and `0.2.2-rc.1`, Windows desktop;
+- The judge's fork activation supports both the nested `request` signature used by
+  `0.2.2-rc.1` and earlier and the flat `0.2.2-rc.2` signature; the shape is selected from
+  the host's `resolveName` / `drainDescendants` capabilities. The rc.2 host is not published
+  yet, so this round covers it with contract tests and real-host regression follows;
 - Since 0.2.2 the host fixes the step's model before pre-step: the judge uses that step's
   `modelSelection` or `agent.model.current()`, and pins the same route into the forked judge.
   On 0.2.1, which has neither API, it falls back to the request header and `agent.options` —
