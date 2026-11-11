@@ -307,6 +307,27 @@ test('a judged /if line is no longer tracked once the step takes it', async () =
 });
 
 
+test('disposing takes back a queued line the user edited but left in /if form', async () => {
+  const loop = createLoop();
+  await send(loop, ' 条件\n秘密指令');
+  const queued = loop.inbox.nextTurn[0];
+  assert.ok(queued, 'the /if line was queued');
+
+  // Editing the entry does not unregister the pre-step hook on its own, but
+  // once the plugin is disposed nothing would rewrite a /if-shaped line, so it
+  // would reach the main model unjudged. Take it back - with the edited text.
+  queued.content = [{ type: 'text', text: '/if 新条件\n新指令' }];
+
+  loop.dispose();
+
+  assert.equal(loop.inbox.nextTurn.length, 0, 'the edited /if line was taken back');
+  const run = loop.appends.find((event) => event.type === 'command/run');
+  assert.ok(run, 'a cancellation card keeps the line recoverable');
+  assert.equal(run.data.args, '新条件\n新指令', 'the card carries what the user actually wrote');
+  const done = loop.appends.find((event) => event.type === 'command/done');
+  assert.match(done.data.text, /插件被停用/);
+});
+
 test('disposing keeps a queued /if line the user edited into ordinary input', async () => {
   const loop = createLoop();
   await send(loop, ' 条件\n秘密指令');
