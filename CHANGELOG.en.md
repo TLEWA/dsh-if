@@ -2,6 +2,20 @@
 
 All notable changes are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+- **A negative verdict was read as YES.** When the judge answered "尚未成立", "未满足",
+  "是错误的" or "YES，但条件并不成立", the old parser matched the positive word inside the
+  sentence and sent the instruction; conversely "否则不需要执行" was read as a bare "否" and
+  silently treated as NO. Negation now goes through `isNegativeVerdict()` first, and a bare
+  "否" only counts as its own word or as the opening of the sentence.
+- **Queued /if lines leaked to the main model on unload.** In message mode `/if …` is first
+  queued as an ordinary user message and rewritten by `agent/pre-step`; if the plugin was
+  disabled or unloaded before that, the old code only aborted the background judgment and the
+  raw line reached the main model as normal input. The queued message id is now tracked, dropped
+  once the line is rewritten or discarded, and removed from the session inbox on unload (skipped
+  when the host has no such API).
+
 ## [0.4.0] - 2026-11-11
 
 - Adopt shared Codex PR review rules and repository-specific review guidance; preserve existing CI, human approval, and release behavior.

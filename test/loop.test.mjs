@@ -18,7 +18,19 @@ function createLoop({ judge = 'YES', mode = 'message', judgeThrows, streamThrows
   const events = [];
   const appends = [];
   const handlers = new Map();
-  const inbox = { nextTurn: [], nextStep: [] };
+  const cleanups = [];
+  // Mirrors the host's durable inbox projection: entries are addressed by id,
+  // and `remove` rewrites the projection (see dropInheritedInbox).
+  const inbox = {
+    nextTurn: [],
+    nextStep: [],
+    remove(id) {
+      for (const queue of [inbox.nextTurn, inbox.nextStep]) {
+        const index = queue.findIndex((message) => message.id === id);
+        if (index >= 0) queue.splice(index, 1);
+      }
+    },
+  };
   const committed = [];
   const steps = [];
   let definition;
@@ -28,7 +40,9 @@ function createLoop({ judge = 'YES', mode = 'message', judgeThrows, streamThrows
   const ctx = {
     logger: { warn() {} },
     effect(fn) {
-      return fn();
+      const dispose = fn();
+      if (typeof dispose === 'function') cleanups.push(dispose);
+      return dispose;
     },
     commands: {
       register(value) {
@@ -54,7 +68,12 @@ function createLoop({ judge = 'YES', mode = 'message', judgeThrows, streamThrows
     on(event, handler) {
       if (event === 'agent/pre-step') preStep = handler;
       handlers.set(event, handler);
-      return () => undefined;
+      // A real unregister removes the waterfall link, which is exactly what
+      // makes an unrewritten `/if` line reach the model after a dispose.
+      return () => {
+        if (preStep === handler) preStep = undefined;
+        if (handlers.get(event) === handler) handlers.delete(event);
+      };
     },
   };
   const emit = (event, ...payload) => {
@@ -113,6 +132,10 @@ function createLoop({ judge = 'YES', mode = 'message', judgeThrows, streamThrows
     appends,
     steps,
     definition,
+    /** Run every `ctx.effect` teardown, like unloading the plugin. */
+    dispose() {
+      for (const cleanup of cleanups.reverse()) cleanup();
+    },
     /** Run one turn exactly like the loop: claim, waterfall, commit or end. */
     async runTurn() {
       const turn = (turnSeq += 1);
@@ -123,12 +146,16 @@ function createLoop({ judge = 'YES', mode = 'message', judgeThrows, streamThrows
       };
       events.push({ type: 'turn/start', seq: events.length, turn });
       const batch = claim();
-      const decision = await preStep({ agent, messages: batch, turn, step: 0, signal: new AbortController().signal }, async () => ({
-        kind: 'enter',
-        // Mirrors the host's default handler: the turn's runtime context is
-        // appended after the claimed batch.
-        messages: context === undefined ? batch : [...batch, context],
-      }));
+      // With the plugin unloaded the waterfall is gone, so the claimed batch
+      // enters unmodified — the leak the dispose test guards against.
+      const decision = preStep === undefined
+        ? { kind: 'enter', messages: batch }
+        : await preStep({ agent, messages: batch, turn, step: 0, signal: new AbortController().signal }, async () => ({
+          kind: 'enter',
+          // Mirrors the host's default handler: the turn's runtime context is
+          // appended after the claimed batch.
+          messages: context === undefined ? batch : [...batch, context],
+        }));
       if (decision.kind === 'reject') {
         endTurn('blocked');
         return { turn, opened: false, messages: [] };
@@ -231,4 +258,41 @@ test('steering queued for the next step is claimed before the queue line', async
   // Both are claimed together, so the /if line is judged in the same batch and
   // the steering keeps its position; nothing is lost.
   assert.deepEqual(result.messages.map(textOf), ['插一句', '指令']);
+});
+
+test('disposing the plugin drops a queued /if line instead of leaking it', async () => {
+  const loop = createLoop();
+  await send(loop, ' 条件\n秘密指令');
+  assert.equal(loop.inbox.nextTurn.length, 1);
+
+  // Unloading (or disabling) the plugin removes the pre-step hook; a raw
+  // `/if` line left in the durable inbox would then be handed to the main
+  // model as ordinary user input, condition and instruction included.
+  loop.dispose();
+
+  assert.equal(loop.inbox.nextTurn.length, 0, 'the raw /if line must not survive the dispose');
+  const result = await loop.runTurn();
+  assert.equal(result.opened, false);
+  assert.equal(loop.steps.length, 0);
+});
+
+test('disposing the plugin leaves ordinary queued messages alone', async () => {
+  const loop = createLoop();
+  await loop.agent.followup({ id: 'plain', role: 'user', content: [{ type: 'text', text: '普通消息' }] });
+  await send(loop, ' 条件\n秘密指令');
+
+  loop.dispose();
+
+  assert.deepEqual(loop.inbox.nextTurn.map((message) => message.id), ['plain']);
+});
+
+test('a judged /if line is no longer tracked once the step takes it', async () => {
+  const loop = createLoop({ judge: 'NO' });
+  await send(loop, ' 条件\n秘密指令');
+  await loop.runTurn();
+  assert.equal(loop.inbox.nextTurn.length, 0);
+
+  // Nothing is left for the dispose path to remove; it must stay a no-op.
+  loop.dispose();
+  assert.equal(loop.inbox.nextTurn.length, 0);
 });

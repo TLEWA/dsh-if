@@ -1021,3 +1021,38 @@ test('the mode is read live, so a settings switch applies without a reload', asy
   await waitFor(() => h.followups.length === 2);
   assert.deepEqual(h.followups[1].content, [{ type: 'text', text: '执行指令' }]);
 });
+
+test('a negative verdict phrased with 未/尚未/是错误的 never runs the instruction', async () => {
+  for (const answer of ['尚未成立', '未成立', '未满足', '尚未满足', '是错误的', 'YES，但条件并不成立', '并没有满足', '不能成立']) {
+    const h = harness({ fork: { text: answer } });
+    assert.deepEqual(await invoke(h, ' 条件\n秘密指令'), { kind: 'success', text: '已排队。' });
+    await waitFor(() => h.disposes.length === 1 || h.followups.length === 1);
+    assert.equal(h.followups.length, 0, `${answer} must not run the instruction`);
+  }
+});
+
+test('a positive verdict still runs the instruction', async () => {
+  for (const answer of ['成立', '正确', '是', '是的', 'YES', '满足', '可以']) {
+    const h = harness({ fork: { text: answer } });
+    await invoke(h, ' 条件\n秘密指令');
+    await waitFor(() => h.followups.length === 1 || h.disposes.length === 1);
+    assert.equal(h.followups.length, 1, `${answer} must run the instruction`);
+    assert.deepEqual(h.followups[0].content, [{ type: 'text', text: '秘密指令' }]);
+  }
+});
+
+test('a bare 否 is a NO, but 否则 is not read as a verdict', async () => {
+  const no = harness({ fork: { text: '否' } });
+  await invoke(no, ' 条件\n秘密指令');
+  await waitFor(() => no.disposes.length === 1 || no.followups.length === 1);
+  assert.equal(no.followups.length, 0);
+
+  // 否则 is grammar, not a verdict. Treating it as NO silently dropped the
+  // line; an unreadable answer must instead leave a failure card.
+  const other = harness({ fork: { text: '否则不需要执行' } });
+  await invoke(other, ' 条件\n秘密指令');
+  await waitFor(() => other.disposes.length === 1);
+  await waitFor(() => failureNotices(other.appends()).length === 1);
+  assert.equal(other.followups.length, 0);
+  assert.match(failureNotices(other.appends())[0].done.text, /未返回 YES\/NO/);
+});
