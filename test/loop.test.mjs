@@ -271,6 +271,15 @@ test('disposing the plugin drops a queued /if line instead of leaking it', async
   loop.dispose();
 
   assert.equal(loop.inbox.nextTurn.length, 0, 'the raw /if line must not survive the dispose');
+  // The line is taken back, not thrown away: a log-only cancellation card
+  // keeps the original arguments so the user can still recover the input.
+  const run = loop.appends.find((event) => event.type === 'command/run');
+  assert.ok(run, 'the removed line leaves a card');
+  assert.equal(run.data.args, '条件\n秘密指令');
+  const done = loop.appends.find((event) => event.type === 'command/done');
+  assert.ok(done, 'the card closes as an error');
+  assert.equal(done.data.kind, 'error');
+  assert.match(done.data.text, /插件被停用/);
   const result = await loop.runTurn();
   assert.equal(result.opened, false);
   assert.equal(loop.steps.length, 0);
@@ -312,4 +321,6 @@ test('disposing keeps a queued /if line the user edited into ordinary input', as
 
   assert.deepEqual(loop.inbox.nextTurn.map((message) => message.id), [queued.id]);
   assert.equal(textOf(loop.inbox.nextTurn[0]), '我改成了普通消息');
+  // Nothing was taken back, so no cancellation card was written either.
+  assert.equal(loop.appends.filter((event) => event.type === 'command/run').length, 0);
 });

@@ -4,6 +4,11 @@ All notable changes are documented here. Versions follow [Semantic Versioning](h
 
 ## [Unreleased]
 
+- **Taking back a queued /if no longer loses the user's input.** Disabling or unloading the plugin
+  removes a still-queued `/if …` so the raw line cannot reach the main model; before removing it the
+  plugin now appends a log-only cancellation card that keeps the original arguments and the
+  "取回 /if" recovery action, so the input can be restored instead of vanishing with the plugin.
+
 - **Dispose no longer deletes a queued line the user edited.** The queue panel can turn `/if …` into an
   ordinary message in place, keeping its id; the unload cleanup now only removes an entry that still
   carries the exact `/if` text it queued, and leaves edited input for the main model.
