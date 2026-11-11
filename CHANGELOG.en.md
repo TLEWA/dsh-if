@@ -2,7 +2,7 @@
 
 All notable changes are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] - 2026-11-11
 
 - **Taking back a queued /if no longer loses the user's input.** Disabling or unloading the plugin
   removes a still-queued `/if …` so the raw line cannot reach the main model; before removing it the
