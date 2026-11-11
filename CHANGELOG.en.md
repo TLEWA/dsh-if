@@ -2,7 +2,7 @@
 
 All notable changes are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.1] - 2026-11-12
 
 ### Compatibility
 
@@ -11,8 +11,10 @@ All notable changes are documented here. Versions follow [Semantic Versioning](h
   signature used by `0.2.2-rc.1` and earlier. The shape is selected from the host's
   `resolveName` / `drainDescendants` capabilities, with no configuration and no `name`
   that could collide between concurrent judgments.
-- The rc.2 host is not published yet (no `0.2.2-rc.2` package on npm), so both signatures
-  are covered by contract tests; real-host regression follows its release.
+- The rc.2 host is not published yet (no `0.2.2-rc.2` package on npm). Both signatures are
+  covered by contract tests; plugin loading and `/if` registration were also confirmed on a
+  temporary web host built from source. The judge's model-driven path still needs a real-host
+  regression after the official release.
 
 ## [0.5.0] - 2026-11-11
 

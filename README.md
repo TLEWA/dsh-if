@@ -53,13 +53,13 @@
 固定版本：
 
 ```text
-dsh-if@0.5.0
+dsh-if@0.5.1
 ```
 
 命令行等价写法：
 
 ```powershell
-dsh plugin --profile desktop add dsh-if@0.5.0
+dsh plugin --profile desktop add dsh-if@0.5.1
 ```
 
 ### 从 GitHub 安装
@@ -73,11 +73,11 @@ https://github.com/TLEWA/dsh-if
 固定到标签或 Release 附件：
 
 ```powershell
-dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.5.0
+dsh plugin --profile desktop add github:TLEWA/dsh-if#v0.5.1
 ```
 
 ```text
-https://github.com/TLEWA/dsh-if/releases/download/v0.5.0/dsh-if-0.5.0.tgz
+https://github.com/TLEWA/dsh-if/releases/download/v0.5.1/dsh-if-0.5.1.tgz
 ```
 
 ### 从源码安装
