@@ -296,3 +296,20 @@ test('a judged /if line is no longer tracked once the step takes it', async () =
   loop.dispose();
   assert.equal(loop.inbox.nextTurn.length, 0);
 });
+
+
+test('disposing keeps a queued /if line the user edited into ordinary input', async () => {
+  const loop = createLoop();
+  await send(loop, ' 条件\n秘密指令');
+  const queued = loop.inbox.nextTurn[0];
+  assert.ok(queued, 'the /if line was queued');
+
+  // The queue panel edits that same entry: the id survives, the text is now the
+  // user's own message, and taking it back on dispose would delete their input.
+  queued.content = [{ type: 'text', text: '我改成了普通消息' }];
+
+  loop.dispose();
+
+  assert.deepEqual(loop.inbox.nextTurn.map((message) => message.id), [queued.id]);
+  assert.equal(textOf(loop.inbox.nextTurn[0]), '我改成了普通消息');
+});

@@ -4,6 +4,9 @@ All notable changes are documented here. Versions follow [Semantic Versioning](h
 
 ## [Unreleased]
 
+- **Dispose no longer deletes a queued line the user edited.** The queue panel can turn `/if …` into an
+  ordinary message in place, keeping its id; the unload cleanup now only removes an entry that still
+  carries the exact `/if` text it queued, and leaves edited input for the main model.
 - **A negative verdict was read as YES.** When the judge answered "尚未成立", "未满足",
   "是错误的" or "YES，但条件并不成立", the old parser matched the positive word inside the
   sentence and sent the instruction; conversely "否则不需要执行" was read as a bare "否" and
