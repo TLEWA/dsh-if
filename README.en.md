@@ -24,12 +24,12 @@ existing prefix is not rewritten.
 
 | Capability | Behavior |
 | --- | --- |
-| Context-aware condition | The judge inherits the full session context (tools + system prompt + history) and answers `YES` or `NO` |
+| Context-aware condition | The judge inherits the full session context (tools + system prompt + history) and may answer only `Yes` or `No` |
 | Reuses the KV cache | The forked judge appends one trailing user message; tools / system / messages stay byte-identical to the main request |
 | Read-only judging | The tool catalog is never trimmed (that is what keeps the prefix identical); an execution-time guard allows `read` / `glob` / `grep` and other inspection tools, and refuses writes, commands, and subagents |
-| Shares the queue | While a turn runs, `/if` queues itself as an ordinary message in the composer's queue dock — editable, removable, steerable — and is judged when the turn opens; a `YES` turns that very message into the instruction |
+| Shares the queue | While a turn runs, `/if` queues itself as an ordinary message in the composer's queue dock — editable, removable, steerable — and is judged when the turn opens; a `Yes` turns that very message into the instruction |
 | Two queueing modes | `message` (default) shares the queue; `background` keeps the 0.2.x behavior: the command returns at once and judges in a background task |
-| Send only when true | Only `YES` sends the instruction as a user message; `NO` never wakes the main agent |
+| Send only when true | Only `Yes` sends the instruction as a user message; `No` never wakes the main agent |
 | Judgment stays out of context | Judging happens in a separate child session; no main-session event and no `agent.inject` |
 | Command arguments stay out of history | `recordInput: false` keeps the condition and instruction out of the input history; only a failed judgement writes them into the log-only `command/run` `args`, which the "取回 /if" button reuses |
 | Multi-line conditions | First line is the condition, the rest is the instruction; use a lone `---` line for multi-line conditions |
@@ -122,8 +122,13 @@ before it would be read as part of the condition.
 - The judge is the model configured for the current session, not a JavaScript or math
   evaluator. `1+1=2` is only a minimal example; conditions can be "has the user approved
   the plan?" or "did the previous reply contain an error?".
-- The judge is asked to output exactly `YES` or `NO`. If no verdict can be parsed, the
-  command fails closed and sends nothing.
+- Only the bare words `Yes` and `No` count as a verdict (case, surrounding quotes, and code
+  fences are tolerated; nothing else is). Answers such as "成立", "否", "否则…", or "YES but the
+  condition is false" are never guessed at.
+- When the answer does not follow the contract, the same condition is asked again, up to
+  `judgeRetries` more times (default 3; 0 disables retrying). Every attempt shares one 60-second
+  judging budget. If no valid answer arrives, the command fails closed, sends nothing, and leaves
+  an `【/if 未执行】` card (the original input stays recoverable through "取回 /if").
 - The judge may inspect files and search code with read-only tools (`read` / `glob` /
   `grep` and friends), but it cannot change anything.
 - If the information needed by the condition is not available in the current context, or the
@@ -138,6 +143,7 @@ before it would be read as part of the condition.
   name: 'dsh-if'
   config:
     mode: message     # default; background restores the 0.2.x behavior
+    judgeRetries: 3   # extra regenerations when the answer is not exactly Yes / No (0-5, 0 = never retry)
 ```
 
 - `mode: message` (default): `/if` first queues itself as an ordinary user message and is judged
@@ -147,8 +153,13 @@ before it would be read as part of the condition.
   runs in a background task, outside the session queue. Because there is no queued entry to rewrite,
   a failed judgement is recorded as an `if` command card explaining why.
 
-You can also skip the file: **Plugins → dsh-if → Configure** shows a "Judge mode" dropdown that
-applies immediately (`mode` is a volatile field, so the settings page rewrites the running config).
+- `judgeRetries` (default 3, range 0-5): how many times to ask again when the judge does not answer
+  exactly `Yes` or `No`; 0 means fail on the first invalid answer. Retries share the first attempt's
+  60-second budget.
+
+Both fields are volatile: the running plugin reads them on every judgement, so changing the config
+needs no reload. **Plugins → dsh-if → Configure** has a "Judge mode" dropdown that rewrites the
+running config; `judgeRetries` can also be set in the `cordis.patch.yml` block above (range 0-5).
 
 The plugin exports a `Config` schema (`@deepseek-ai/schemastery`) describing that field; unknown
 keys are ignored and a missing `mode` means `message`.
@@ -189,7 +200,7 @@ keys are ignored and a missing `mode` means `message`.
    `ctx.tools.guard` guard — scoped to judge children only — allows `read` / `glob` / `grep` /
    `web_search` / `web_fetch` / `skill` and refuses every mutating or executing tool. The tool
    catalog is not filtered, so the cached prefix is unaffected.
-7. The judge times out after 60 seconds. Only on `YES` the instruction is handed to the main agent
+7. The judge times out after 60 seconds (retries share that budget). Only on `Yes` the instruction is handed to the main agent
    as an identified user message with `id` and `role: 'user'`. On `NO`, the queued message is
    dropped and the main agent is not touched.
 8. **Fallback path.** When the host has no prefix-inheriting fork provider, `historyTranscript()`
@@ -339,7 +350,7 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
 - **[dsh-sidebar-row-menu](https://github.com/TLEWA/dsh-sidebar-row-menu)** — right-click menus for sidebar rows: workspace rows, session rows and the conversation body each get their own menu, with "Open with" and "More actions" submenus.
 - **[dsh-sidebar-organizer](https://github.com/TLEWA/dsh-sidebar-organizer)** — a layout organizer for seven regions: sidebar, sidebar footer, conversation tabs, composer, session header, right panel, and settings navigation all support long-press drag to reorder, and panels can be tucked into "More".
 - **[dsh-better-choice](https://github.com/TLEWA/dsh-better-choice)** — an `ask_user_question` enhancement: right-click an option to add a note, or ask the model a side question with the same context before choosing.
-- **[dsh-utf8-output](https://github.com/TLEWA/dsh-utf8-output)** — fixes GBK/CP936/CP932 mojibake from DSH subprocess output on Windows.
+- **[dsh-utf8-output](https://github.com/TLEWA/dsh-utf8-output)** — fixes GBK/CP936/GB18030 mojibake from DSH subprocess output on Windows.
 - **[dsh-opencode-go-router](https://github.com/TLEWA/dsh-opencode-go-router)** — rotates OpenCode Go routing after a context fold or a system-prompt rewrite, so less of the prompt cache is lost.
 - **[dsh-fastload](https://github.com/TLEWA/dsh-fastload)** — trims the first history page of long sessions while preserving the tail the user actually sees.
 - **[dsh-ptc-noargs](https://github.com/TLEWA/dsh-ptc-noargs)** — fixes rejected argument-less tool calls in PTC `run_code` by normalizing an omitted or `undefined` first argument to `{}`.

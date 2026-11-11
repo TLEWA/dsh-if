@@ -20,17 +20,17 @@
 
 | 能力 | 行为 |
 | --- | --- |
-| 上下文条件判断 | 判断器继承当前会话的完整上下文（工具 + system prompt + 历史消息），按条件回答 `YES` 或 `NO` |
+| 上下文条件判断 | 判断器继承当前会话的完整上下文（工具 + system prompt + 历史消息），只允许回答 `Yes` 或 `No` |
 | 复用 KV 缓存 | fork 子代理只追加一条尾部 user 消息，tools / system / messages 与主会话逐字节一致，命中 provider 前缀缓存 |
 | 只读判断 | 工具目录保持不变（这正是缓存命中的前提），执行期 guard 只放行 `read` / `glob` / `grep` 等只读工具；写入、命令、子代理一律拒绝 |
 | 与普通消息同队列 | 模型工作时，`/if` 作为一条普通消息进入输入框上方的队列面板：可以编辑、删除、↑ 插话；回合开始时才判断，成立就把这条消息原地换成指令 |
 | 两种排队模式 | 默认 `message`（与普通消息同队列）；`background` 保留 0.2.x 的行为：命令立即返回，判断在后台跑 |
-| 条件成立才发送 | 只有 `YES` 才把指令作为用户消息发给主 agent，`NO` 完全不触发主 agent |
+| 条件成立才发送 | 只有 `Yes` 才把指令作为用户消息发给主 agent，`No` 完全不触发主 agent |
 | 判断不进上下文 | 判断在独立子会话里完成，不写主会话事件，不调用 `agent.inject` |
 | 命令不留输入历史 | `recordInput: false`：条件与指令不进输入历史；仅判断失败时，为支撑卡片上的「取回 /if」，把本次原文写入 `command/run` 的 `args` |
 | 多行条件 | 第一行是条件，其余行是指令；条件有多行时用单独一行 `---` 分隔 |
 | 自动回退 | host 没有可继承上下文的 fork provider 时，回退到一次性 `ctx.llm.stream` + 约 24k 字符纯文本记录 |
-| 防止误发 | 条件为空、指令为空、判断输出不是 `YES` / `NO`、或判断超时，都返回错误且不发送 |
+| 防止误发 | 条件为空、指令为空、判断输出不是 `Yes` / `No`、或判断超时，都返回错误且不发送；回答不合约定时自动重新生成，默认最多重试 3 次（`judgeRetries`） |
 
 ## 安装
 
@@ -118,7 +118,11 @@ dsh plugin --profile desktop add .
 
 - 判断由当前会话配置的模型完成，不是 JavaScript 或数学求值器。
   `1+1=2` 只是最小示例；条件可以是“用户是否已经确认方案”“上一条回复是否包含错误”等。
-- 判断器只被要求输出 `YES` 或 `NO`。输出里没有可识别结果时按判断失败处理，不发送指令。
+- 判定只接受 `Yes` 或 `No` 这两个词（大小写、首尾引号和代码围栏可以容忍，其余一律不认）：
+  「是」「成立」「YES，但条件并不成立」「否」「否则……」都不算判定，不会被猜测成 Yes/No。
+- 回答不合约定时，插件会把同一个条件原样再问一次，最多重试 `judgeRetries` 次（默认 3，设 0 表示
+  不重试）。所有尝试共用一个 60 秒判断预算；仍然拿不到合法回答就按判断失败处理，不发送指令，
+  并在会话里留一张 `【/if 未执行】` 卡片（同样可通过「取回 /if」找回原文）。
 - 判断器可以只读地查看文件、检索代码来确认事实（`read` / `glob` / `grep` 等），但不能做任何修改。
 - 条件需要的信息在当前上下文里找不到、或者条件含糊无法确定时，判为不成立：宁可不动，也不误发指令。
 - UI 只显示通用结果，不回显条件、指令或判断原文。
@@ -131,6 +135,7 @@ dsh plugin --profile desktop add .
   name: 'dsh-if'
   config:
     mode: message     # 默认。background = 0.2.x 的老行为
+    judgeRetries: 3   # 回答不是严格的 Yes / No 时最多重新生成几次（0-5，0 = 不重试）
 ```
 
 - `mode: message`（默认）：`/if` 先作为一条普通用户消息排队，等轮次真正开始时再判断。
@@ -139,11 +144,15 @@ dsh plugin --profile desktop add .
   适合不想让判断占用一轮队列位置的场景。判断失败时会在会话里记一张 `if` 命令卡片说明原因
   （后台模式没有排队条目可以改写）。
 
-也可以不改文件：**插件 → dsh-if → 配置** 里有「判断方式」下拉框，切换即时生效（`mode` 声明为
-volatile 字段，设置页直接改写运行中的配置）。
+- `judgeRetries`（默认 3，范围 0-5）：判断器回答不是严格的 `Yes` / `No` 时，最多再问几次；
+  0 表示不重试、第一次不合约定就直接报错。重试与首次尝试共享同一个 60 秒判断预算。
 
-插件导出 `Config`（`@deepseek-ai/schemastery`）描述这个字段；`mode` 缺省即为 `message`，
-未知字段被忽略。
+两个字段都声明为 volatile：运行中的插件每次判断都读取最新值，改配置无需重载插件。
+**插件 → dsh-if → 配置** 里的「判断方式」下拉框会直接改写运行中的配置；`judgeRetries` 也可以写在
+上面的 `cordis.patch.yml` 里（范围 0-5）。
+
+插件导出 `Config`（`@deepseek-ai/schemastery`）描述这些字段；`mode` 缺省即为 `message`，
+`judgeRetries` 缺省即为 3，未知字段被忽略。
 
 ## 工作方式
 
@@ -172,8 +181,8 @@ volatile 字段，设置页直接改写运行中的配置）。
 6. **执行期只读限制。** 子会话继承完整工具目录，但 `ctx.tools.guard` 注册的 guard 只对判断子会话生效：
    `read` / `glob` / `grep` / `web_search` / `web_fetch` / `skill` 等只读工具放行，
    写入、修改、执行命令、子代理等一律返回拒绝文案。工具目录不裁剪，所以缓存前缀不变。
-7. 判断超时 60 秒；只有 `YES` 时把指令作为一条带 `id` 和 `role: 'user'` 的已识别消息交给主 agent；
-   `NO` 时这条排队消息被丢弃，完全不触发主 agent。
+7. 判断超时 60 秒（重试共享这一个预算）；只有 `Yes` 时把指令作为一条带 `id` 和 `role: 'user'` 的已识别消息交给主 agent；
+   `No` 时这条排队消息被丢弃，完全不触发主 agent。
 8. **回退路径。** host 没有可继承上下文的 fork provider 时，`historyTranscript()` 读取
    `agent.session.deriveMessages()`，只保留 user / assistant / tool 消息，生成最多约 24k 字符的纯文本记录
    （每条消息最多 3k 字符，保留头尾），再用 `ctx.llm.stream()` 发起一次性判断请求。
@@ -286,7 +295,7 @@ npm run test:slow
 - **[dsh-sidebar-row-menu](https://github.com/TLEWA/dsh-sidebar-row-menu)** —— 侧栏行右键菜单：工作区行、会话行与会话正文各有自己的右键菜单，含「打开方式」「更多操作」二级菜单。
 - **[dsh-sidebar-organizer](https://github.com/TLEWA/dsh-sidebar-organizer)** —— 七区域布局整理器：侧栏、侧栏底部、对话标签、输入框、会话头部、右侧栏、设置导航都能长按拖拽排序，面板可以收进「更多」再拖回来。
 - **[dsh-better-choice](https://github.com/TLEWA/dsh-better-choice)** —— `ask_user_question` 增强：右键选项补备注，选之前先拿同一份上下文旁问模型一句。
-- **[dsh-utf8-output](https://github.com/TLEWA/dsh-utf8-output)** —— 修复 Windows 下 DSH 子进程 GBK/CP936/CP932 输出乱码。
+- **[dsh-utf8-output](https://github.com/TLEWA/dsh-utf8-output)** —— 修复 Windows 下 DSH 子进程 GBK/CP936/GB18030 输出乱码。
 - **[dsh-opencode-go-router](https://github.com/TLEWA/dsh-opencode-go-router)** —— 上下文折叠或系统提示被重写后轮换 OpenCode Go 路由，少丢一点提示缓存。
 - **[dsh-fastload](https://github.com/TLEWA/dsh-fastload)** —— 长会话首屏历史瘦身：缩小首次打开时的历史页，同时保留用户实际看到的尾部内容。
 - **[dsh-ptc-noargs](https://github.com/TLEWA/dsh-ptc-noargs)** —— 修复 PTC `run_code` 中无参工具调用被拒绝的问题：把省略或 `undefined` 的首参归一化为 `{}`。

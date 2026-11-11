@@ -160,7 +160,14 @@ function harness({
         return {
           result: Promise.resolve({
             stopReason: forkStopReason,
-            output: fork.text === undefined ? [] : [{ type: 'text', text: fork.text }],
+            output: (() => {
+              // A sequence scripts a judge that has to be asked more than once.
+              if (Array.isArray(fork.text)) {
+                const answer = fork.text[Math.min(forks.length, fork.text.length) - 1];
+                return answer === undefined ? [] : [{ type: 'text', text: answer }];
+              }
+              return fork.text === undefined ? [] : [{ type: 'text', text: fork.text }];
+            })(),
           }),
           dispose: async () => {
             disposes.push(options.childId);
@@ -457,25 +464,37 @@ test('forked judge NO verdict does not send the instruction', async () => {
   assert.equal(h.followups.length, 0);
 });
 
-test('a forked judge that answers in Chinese still yields a verdict', async () => {
-  // The child inherits the parent's language, and a Chinese session answers
-  // "是" / "不成立" even when the prompt asks for YES / NO.
-  const yes = harness({ fork: { text: '是' } });
-  assert.equal((await invoke(yes, ' 条件\n执行指令')).kind, 'success');
-  await waitFor(() => yes.followups.length === 1);
+test('a forked judge that answers outside Yes/No is asked again', async () => {
+  // The child inherits the parent's language and may answer "是" / "不成立"
+  // even though the prompt only allows Yes or No. That is not a verdict: the
+  // answer is never guessed at, the same question is asked once more instead.
+  const h = harness({ fork: { text: ['是', 'Yes'] } });
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
+  await waitFor(() => h.followups.length === 1 && h.disposes.length === 2);
 
-  const no = harness({ fork: { text: '不成立' } });
-  assert.deepEqual(await invoke(no, ' 条件\n执行指令'), { kind: 'success', text: '已排队。' });
-  await waitFor(() => no.disposes.length === 1);
-  assert.equal(no.followups.length, 0);
+  assert.equal(h.forks.length, 2, 'the judge was asked twice');
+  assert.deepEqual(h.followups[0].content, [{ type: 'text', text: '执行指令' }]);
+  assert.ok(h.warnings().some((message) => /outside Yes\/No/.test(message)));
+});
+
+test('the judge retry count is configurable and 0 means no retry', async () => {
+  const never = harness({ fork: { text: 'MAYBE' }, config: { mode: 'background', judgeRetries: 0 } });
+  await invoke(never, ' 条件\n秘密指令');
+  await waitFor(() => failureNotices(never.appends()).length === 1);
+
+  assert.equal(never.forks.length, 1, 'judgeRetries: 0 asks exactly once');
+  assert.match(failureNotices(never.appends())[0].done.text, /共尝试 1 次/);
 });
 
 test('forked judge output with tool-call markup still yields a verdict', async () => {
+  // The markup is sanitised away first; the one word left is the verdict, so
+  // this answer is not treated as a retry.
   const h = harness({ fork: { text: '<tool_call>{"name":"bash"}</tool_call>\nYES' } });
   const result = await invoke(h, ' 条件\n执行指令');
 
   assert.equal(result.kind, 'success');
   await waitFor(() => h.followups.length === 1);
+  assert.equal(h.forks.length, 1);
 });
 
 test('forked judge output without YES/NO is reported without involving the model', async () => {
@@ -485,6 +504,8 @@ test('forked judge output without YES/NO is reported without involving the model
   assert.equal(result.kind, 'success');
   assert.doesNotMatch(JSON.stringify(result), /秘密指令|MAYBE/);
   await waitFor(() => failureNotices(h.appends()).length === 1);
+  assert.equal(h.forks.length, 4, 'the default allows three retries');
+  assert.match(failureNotices(h.appends())[0].done.text, /没有回答 Yes 或 No（共尝试 4 次）/);
   // The notice is a command card: visible in the chat, never read by the main
   // model, and it costs no request.
   assert.equal(h.followups.length, 0, 'nothing is queued as a user message');
@@ -493,8 +514,8 @@ test('forked judge output without YES/NO is reported without involving the model
   assert.equal(notice.run.args, '条件\n秘密指令', 'the original input stays recoverable');
   assert.equal(notice.done.kind, 'error');
   assert.match(notice.done.text, /^【\/if 未执行】/);
-  assert.match(notice.done.text, /模型未返回 YES\/NO/);
-  assert.equal(h.disposes.length, 1);
+  assert.match(notice.done.text, /没有回答 Yes 或 No/);
+  assert.equal(h.disposes.length, h.forks.length, 'every attempt disposes its child');
 });
 
 test('the tool guard keeps the judge child read-only, like plan mode', async () => {
@@ -822,7 +843,7 @@ test('an unrecognised verdict is reported and does not send the instruction', as
   assert.equal(h.followups.length, 0, 'the failure never becomes a user message');
   const [notice] = failureNotices(h.appends());
   assert.equal(notice.run.args, '条件\n秘密指令');
-  assert.match(notice.done.text, /模型未返回 YES\/NO/);
+  assert.match(notice.done.text, /没有回答 Yes 或 No/);
 });
 
 test('a provider without reasoningEffort support is retried once', async () => {
@@ -915,7 +936,7 @@ test('a failed judge leaves no message behind, only a command card', async () =>
   assert.ok(notice, 'the failure is recorded in the conversation');
   assert.equal(notice.run.args, '条件\n秘密指令');
   assert.match(notice.done.text, /^【\/if 未执行】/);
-  assert.match(notice.done.text, /模型未返回 YES\/NO/);
+  assert.match(notice.done.text, /没有回答 Yes 或 No/);
 });
 
 test('an aborted batch keeps a cancellation card for verdicts already judged', async () => {
@@ -1020,4 +1041,19 @@ test('the mode is read live, so a settings switch applies without a reload', asy
   await waitFor(() => h.forks.length === 1);
   await waitFor(() => h.followups.length === 2);
   assert.deepEqual(h.followups[1].content, [{ type: 'text', text: '执行指令' }]);
+});
+
+test('an answer that is not exactly Yes or No is never guessed at', async () => {
+  // Earlier versions tried to salvage a verdict out of "是", "成立" or a
+  // trailing clause. Guessing wrong silently runs (or skips) the instruction,
+  // so an answer outside the two allowed words is now asked again instead.
+  for (const answer of ['是', '成立', '正确', 'YES，但条件并不成立', '否', '否则不需要执行']) {
+    const h = harness({ fork: { text: answer } });
+    await invoke(h, ' 条件\n秘密指令');
+    await waitFor(() => failureNotices(h.appends()).length === 1);
+
+    assert.equal(h.forks.length, 4, `${answer} must be asked again, not read as a verdict`);
+    assert.equal(h.followups.length, 0, `${answer} must not run the instruction`);
+    assert.match(failureNotices(h.appends())[0].done.text, /共尝试 4 次/);
+  }
 });
