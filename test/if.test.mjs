@@ -21,6 +21,7 @@ function harness({
   forkStopReason = 'completed',
   forkDispose,
   forkInherits = true,
+  flat = false,
   inherited = [],
   inheritedSteps = [],
   modelAccessor,
@@ -102,6 +103,12 @@ function harness({
       getProvider(id) {
         return id === 'fork' ? { id, inheritsParentContext: forkInherits } : undefined;
       },
+      ...(flat
+        ? {
+            // 0.2.2-rc.2 exposes the named-subagent API.
+            resolveName() {},
+          }
+        : {}),
       async startActivation(options) {
         if (!forkInherits) throw new Error('a non-inheriting provider must not be used');
         forks.push({ ...options, eventsAtStart: events.map((event) => `${event.type}:${event.seq}`) });
@@ -352,6 +359,32 @@ test('forked judge inherits the session and appends only the condition prompt', 
   assert.equal(h.followups.length, 1);
   assert.deepEqual(h.followups[0].content, [{ type: 'text', text: '请运行测试' }]);
   assert.deepEqual(h.disposes, [request.childId], 'the judge session is disposed after judging');
+});
+
+test('the forked judge uses the flat 0.2.2-rc.2 activation spec', async () => {
+  const h = harness({ fork: { text: 'YES' }, flat: true });
+  const result = await invoke(h, ' 条件成立\n执行指令');
+
+  assert.deepEqual(result, { kind: 'success', text: '已排队。' });
+  await waitFor(() => h.followups.length === 1 && h.disposes.length === 1);
+  assert.equal(h.calls.length, 0, 'the forked judge must not open a second llm stream');
+  assert.equal(h.forks.length, 1);
+
+  const spec = h.forks[0];
+  assert.equal(spec.provider, 'fork');
+  assert.equal(spec.delivery, 'caller');
+  assert.equal(spec.parent, h.agent);
+  assert.deepEqual(spec.agentOptions, { maxTokens: 1024 });
+  assert.equal(spec.prompt.length, 1, 'the only new content is one user message');
+  assert.equal(spec.prompt[0].type, 'text');
+  assert.match(spec.prompt[0].text, /条件成立/);
+  // rc.2 flattens the activation spec and has no nested request.
+  assert.equal('request' in spec, false);
+  // Omit name: concurrent /if judging must not collide on a child name.
+  assert.equal('name' in spec, false);
+
+  assert.deepEqual(h.followups[0].content, [{ type: 'text', text: '执行指令' }]);
+  assert.deepEqual(h.disposes, [spec.childId], 'the judge session is disposed after judging');
 });
 
 test('the forked judge drops work inherited from the parent queue', async () => {

@@ -2,6 +2,18 @@
 
 All notable changes are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Compatibility
+
+- The judge's fork activation now supports both the flat DSH `0.2.2-rc.2` signature
+  (`parent` / `agentOptions` / `prompt` at the top level) and the nested `request`
+  signature used by `0.2.2-rc.1` and earlier. The shape is selected from the host's
+  `resolveName` / `drainDescendants` capabilities, with no configuration and no `name`
+  that could collide between concurrent judgments.
+- The rc.2 host is not published yet (no `0.2.2-rc.2` package on npm), so both signatures
+  are covered by contract tests; real-host regression follows its release.
+
 ## [0.5.0] - 2026-11-11
 
 - **Taking back a queued /if no longer loses the user's input.** Disabling or unloading the plugin

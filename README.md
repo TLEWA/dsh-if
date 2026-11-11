@@ -213,6 +213,9 @@ dsh plugin --profile desktop add .
 ## 兼容性
 
 - 已在 DSH `0.2.1-rc.5` 与 `0.2.2-rc.1`、Windows 桌面端验证；
+- judge 的 fork 子代理激活同时兼容 `0.2.2-rc.1` 及更早的嵌套 `request` 签名与
+  `0.2.2-rc.2` 的扁平签名，按宿主是否提供 `resolveName` / `drainDescendants` 自动选择；
+  rc.2 宿主尚未正式发布，本轮以契约单测覆盖，真机回归待发布后补；
 - 0.2.2 起宿主在 pre-step 之前固定本步模型：判断优先使用该步的 `modelSelection` 或
   `agent.model.current()`，再把同一路由钉进 fork 子会话（0.2.1 没有这些 API 时退回请求头与
   `agent.options`，行为不变）；
