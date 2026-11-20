@@ -2,6 +2,15 @@
 
 All notable changes are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- A judge request refused by the model's content-safety review (the `CONTENT_REFUSED` code added in
+  DSH 0.2.2-rc.5) now makes the `【/if 未执行】` card name that cause, instead of reporting it as an
+  ordinary judging failure and echoing the provider's English diagnostic.
+  (Regression test: `a content refusal names the cause instead of echoing the provider sentence`)
+
 ## [0.5.1] - 2026-11-12
 
 ### Compatibility
