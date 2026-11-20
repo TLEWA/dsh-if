@@ -693,6 +693,28 @@ test('a judge failure never echoes the child output into warnings or cards', asy
   assert.match(notice.done.text, /判断器执行失败|判断失败/);
 });
 
+test('a content refusal names the cause instead of echoing the provider sentence', async () => {
+  const h = harness({
+    stream() {
+      const error = new Error(
+        'DeepSeek refused to answer under its content safety review: blocked image',
+      );
+      error.code = 'CONTENT_REFUSED';
+      return (async function* refused() {
+        throw error;
+      })();
+    },
+  });
+
+  const result = await invoke(h, ' 条件\n执行指令');
+  assert.equal(result.kind, 'success');
+  await waitFor(() => failureNotices(h.appends()).length === 1);
+  const [notice] = failureNotices(h.appends());
+  assert.match(notice.done.text, /内容安全审查/);
+  assert.doesNotMatch(JSON.stringify(notice), /content safety review/);
+  assert.equal(h.followups.length, 0, 'a refused judge never sends the instruction');
+});
+
 test('a failing fork activation falls back to the transcript judge', async () => {
   const h = harness({ answer: 'YES', fork: { text: 'YES' }, forkThrows: new Error('fork unavailable') });
 

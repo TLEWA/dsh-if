@@ -329,6 +329,9 @@ The tests use mocked `ctx.commands`, `ctx.llm`, `ctx.subagents`, `ctx.tools`, an
   the batch, and an `【/if 未执行】` command card (reason + expandable explanation) is logged in the
   session; "取回 /if" on the right of that card restores the original input for editing. `background`
   mode has no queued entry, so it logs the same card. A warning is logged as well.
+- When the model refuses the judge request under its content-safety review (the `CONTENT_REFUSED`
+  code added in DSH 0.2.2-rc.5), the card names that cause instead of echoing the provider's
+  English sentence as an ordinary judging failure.
 - When a batch is cancelled after judging but before the instruction is sent, every judged `/if`
   leaves an `【/if 未执行】` card (reason "batch cancelled") and the instruction is not executed;
   a cancellation during judging records the whole batch as failed cards.

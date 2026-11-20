@@ -3,6 +3,14 @@
 本项目的所有重要变更都记录在这里，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 修复
+
+- 判断请求因内容安全审查被拒时（DSH 0.2.2-rc.5 新增的 `CONTENT_REFUSED`），`【/if 未执行】` 卡片
+  直接说明「模型因内容安全审查拒绝回答」，不再把它当成普通判断失败并回显提供方的英文诊断。
+  （回归测试：`a content refusal names the cause instead of echoing the provider sentence`）
+
 ## [0.5.1] - 2026-11-12
 
 ### 兼容
