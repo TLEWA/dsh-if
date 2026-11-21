@@ -11,6 +11,23 @@
   直接说明「模型因内容安全审查拒绝回答」，不再把它当成普通判断失败并回显提供方的英文诊断。
   （回归测试：`a content refusal names the cause instead of echoing the provider sentence`）
 
+- 修复判断请求的错误分流：这个缺陷在 0.5.1 及更早版本里就存在，属于修复既有缺陷，不是对某个
+  新宿主版本（如 rc.6）的适配。宿主把失败的模型调用归一成 `finish` 块，失败信息放在
+  `reason = { kind: 'error' | 'aborted', failure }` 对象里；旧代码却拿 `reason` 和字符串
+  `'error'` 比较，判断恒为 `false`。于是提供方异常被当成「空回答」，连问三次后才落到
+  「模型没有回答 Yes 或 No」，`failure.code` 也传不到拒答与不支持 `reasoningEffort` 的分流。
+  现在第一个失败 `finish` 块就按失败上报，并把 `failure.code` 原样带到分流上：内容安全审查
+  照旧得到拒答文案，不支持 `reasoningEffort: 'off'` 的提供方只重试一次；预检（`agent/pre-step`）
+  路径同样按拒答文案上报。正常 `finish` 块的控制流没有改变。
+  （回归测试：`an adapter error finish chunk fails the judge instead of spending the retries`、
+  `a CONTENT_REFUSED finish chunk reaches the refusal copy`、
+  `a CONTENT_REFUSED finish chunk also routes the pre-step refusal`、
+  `a normal finish reason object still yields a verdict unchanged`、
+  `an UNSUPPORTED_REASONING_EFFORT finish chunk still retries without the effort`）
+- fork 判断器以 `stopReason: 'error'` 结束时，改用子代理结果里的 `diagnostic` 作为失败原因，
+  不再一律报「判断器执行失败」并丢掉宿主转发的提供方诊断。
+  （回归测试：`a fork failure keeps the provider diagnostic instead of a generic message`）
+
 ## [0.5.1] - 2026-11-12
 
 ### 兼容

@@ -19,6 +19,7 @@ function harness({
   fork,
   forkThrows,
   forkStopReason = 'completed',
+  forkDiagnostic,
   forkDispose,
   forkInherits = true,
   flat = false,
@@ -167,6 +168,9 @@ function harness({
         return {
           result: Promise.resolve({
             stopReason: forkStopReason,
+            // The host forwards the provider-safe cause on failure; a test can
+            // script it to pin what the plugin does with it.
+            ...(forkDiagnostic === undefined ? {} : { diagnostic: forkDiagnostic }),
             output: (() => {
               // A sequence scripts a judge that has to be asked more than once.
               if (Array.isArray(fork.text)) {
@@ -715,6 +719,124 @@ test('a content refusal names the cause instead of echoing the provider sentence
   assert.equal(h.followups.length, 0, 'a refused judge never sends the instruction');
 });
 
+test('an adapter error finish chunk fails the judge instead of spending the retries', async () => {
+  const h = harness({
+    stream() {
+      return (async function* failed() {
+        // The host's real shape (dsh-llm StreamChunk): a finish chunk whose
+        // reason is an object carrying the provider-neutral failure. Comparing
+        // that object to the string 'error' never matched, so this chunk used
+        // to look like an empty answer and burned every Yes/No retry.
+        yield {
+          type: 'finish',
+          reason: { kind: 'error', failure: { code: 'TRANSPORT', message: 'provider connection reset' } },
+        };
+      })();
+    },
+  });
+
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
+  await waitFor(() => failureNotices(h.appends()).length === 1);
+  const [notice] = failureNotices(h.appends());
+  assert.match(notice.done.text, /provider connection reset/);
+  assert.doesNotMatch(notice.done.text, /没有回答 Yes 或 No/);
+  assert.equal(h.calls.length, 1, 'a failed request is not retried as a malformed answer');
+  assert.equal(h.followups.length, 0, 'a failed judge never sends the instruction');
+});
+
+test('a CONTENT_REFUSED finish chunk reaches the refusal copy', async () => {
+  const h = harness({
+    stream() {
+      return (async function* refused() {
+        yield {
+          type: 'finish',
+          reason: {
+            kind: 'error',
+            failure: {
+              code: 'CONTENT_REFUSED',
+              message: 'DeepSeek refused to answer under its content safety review: blocked image',
+            },
+          },
+        };
+      })();
+    },
+  });
+
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
+  await waitFor(() => failureNotices(h.appends()).length === 1);
+  const [notice] = failureNotices(h.appends());
+  assert.match(notice.done.text, /内容安全审查/);
+  assert.doesNotMatch(JSON.stringify(notice), /content safety review/);
+  assert.equal(h.calls.length, 1, 'a refusal is not retried as a malformed answer');
+  assert.equal(h.followups.length, 0);
+});
+
+test('a CONTENT_REFUSED finish chunk also routes the pre-step refusal', async () => {
+  const h = harness({
+    config: null,
+    stream() {
+      return (async function* refused() {
+        yield {
+          type: 'finish',
+          reason: {
+            kind: 'error',
+            failure: {
+              code: 'CONTENT_REFUSED',
+              message: 'DeepSeek refused to answer under its content safety review',
+            },
+          },
+        };
+      })();
+    },
+  });
+  const queued = { id: 'm1', role: 'user', content: [{ type: 'text', text: '/if 条件\n执行指令' }] };
+
+  const decision = await h.preStep([queued]);
+
+  // Rejecting the entering batch ends the turn, exactly like an unparsed answer.
+  assert.deepEqual(decision, { kind: 'reject' });
+  const [notice] = failureNotices(h.appends());
+  assert.ok(notice, 'the failure is recorded as a command card');
+  assert.match(notice.done.text, /内容安全审查/);
+  assert.doesNotMatch(JSON.stringify(notice), /content safety review/);
+});
+
+test('a normal finish reason object still yields a verdict unchanged', async () => {
+  const h = harness({
+    stream() {
+      return (async function* ok() {
+        yield { type: 'text-delta', text: 'YES' };
+        yield { type: 'finish', reason: { kind: 'stop' } };
+      })();
+    },
+  });
+
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
+  await waitFor(() => h.followups.length === 1);
+  assert.deepEqual(h.followups[0].content, [{ type: 'text', text: '执行指令' }]);
+  assert.equal(h.calls.length, 1, 'a normal answer is asked once');
+  assert.equal(failureNotices(h.appends()).length, 0);
+});
+
+test('a fork failure keeps the provider diagnostic instead of a generic message', async () => {
+  const diagnostic = 'judge child failed: provider quota exhausted';
+  const h = harness({
+    fork: { text: 'YES' },
+    forkStopReason: 'error',
+    forkDiagnostic: diagnostic,
+    stream() {
+      throw new Error('transcript judge unavailable');
+    },
+  });
+
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
+  await waitFor(() => failureNotices(h.appends()).length === 1);
+  assert.ok(
+    h.warnings().some((message) => message.includes(diagnostic)),
+    'the fallback log carries the child diagnostic instead of dropping it',
+  );
+});
+
 test('a failing fork activation falls back to the transcript judge', async () => {
   const h = harness({ answer: 'YES', fork: { text: 'YES' }, forkThrows: new Error('fork unavailable') });
 
@@ -918,6 +1040,35 @@ test('a provider without reasoningEffort support is retried once', async () => {
   const result = await invoke(h, ' 条件\n执行指令');
 
   assert.equal(result.kind, 'success');
+  await waitFor(() => h.followups.length === 1);
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[0].reasoningEffort, 'off');
+  assert.equal(h.calls[1].reasoningEffort, undefined);
+});
+
+test('an UNSUPPORTED_REASONING_EFFORT finish chunk still retries without the effort', async () => {
+  // The same routing through the host's real failure shape: the stable code
+  // travels inside the finish chunk instead of being thrown by the adapter.
+  const h = harness({
+    stream(options, callNumber) {
+      return (async function* answering() {
+        if (callNumber === 1) {
+          yield {
+            type: 'finish',
+            reason: {
+              kind: 'error',
+              failure: { code: 'UNSUPPORTED_REASONING_EFFORT', message: 'reasoningEffort is unsupported' },
+            },
+          };
+          return;
+        }
+        yield { type: 'text-delta', text: 'YES' };
+        yield { type: 'finish', reason: { kind: 'stop' } };
+      })();
+    },
+  });
+
+  assert.equal((await invoke(h, ' 条件\n执行指令')).kind, 'success');
   await waitFor(() => h.followups.length === 1);
   assert.equal(h.calls.length, 2);
   assert.equal(h.calls[0].reasoningEffort, 'off');

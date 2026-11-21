@@ -11,6 +11,27 @@ All notable changes are documented here. Versions follow [Semantic Versioning](h
   ordinary judging failure and echoing the provider's English diagnostic.
   (Regression test: `a content refusal names the cause instead of echoing the provider sentence`)
 
+- Fix the judge's dead error routing. The defect predates this change — it is present in 0.5.1 and
+  earlier, so this is a fix for existing behaviour, not an adaptation to a newer host build such
+  as rc.6. The host reports a failed call as a `finish` chunk whose `reason` is
+  `{ kind: 'error' | 'aborted', failure }`; the code compared `reason` with the string
+  `'error'`, which is always `false`. A provider failure therefore looked like an empty answer,
+  was asked again up to three times, and ended as "the model did not answer Yes or No", while
+  `failure.code` never reached the refusal or unsupported-effort routing. The first failure
+  `finish` now reports the failure and carries `failure.code` into that routing: a content
+  refusal keeps the refusal copy, a provider that rejects `reasoningEffort: 'off'` is retried
+  exactly once, and the `agent/pre-step` path names a refusal the same way. Normal `finish`
+  chunks keep their control flow unchanged.
+  (Regression tests: `an adapter error finish chunk fails the judge instead of spending the retries`,
+  `a CONTENT_REFUSED finish chunk reaches the refusal copy`,
+  `a CONTENT_REFUSED finish chunk also routes the pre-step refusal`,
+  `a normal finish reason object still yields a verdict unchanged`,
+  `an UNSUPPORTED_REASONING_EFFORT finish chunk still retries without the effort`)
+- When the forked judge ends with `stopReason: 'error'`, its `diagnostic` is now used as the
+  failure reason instead of collapsing into the generic "judge failed" message and dropping the
+  provider diagnostic the host forwards.
+  (Regression test: `a fork failure keeps the provider diagnostic instead of a generic message`)
+
 ## [0.5.1] - 2026-11-12
 
 ### Compatibility
